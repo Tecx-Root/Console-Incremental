@@ -2,18 +2,25 @@
 
 由 C++ 控制台增量游戏 `ConsoleIncremental` 移植而来的网页版本。纯静态，双击 `index.html` 即可运行，无需构建或服务器。
 
+**本版本不含背景音乐**：音乐模块、`music` / `vol` 命令与音频资源已整体移除。输入相关命令会给出明确提示。
+
 ## 已移植功能
 
 - 欢迎 → 玩家名输入（已有存档提示）→ 槽位选择（5 槽位）→ 选小游戏 → 命令行
-- 虚拟路径系统：`cd` / `~` / `show` / `tree` / 快捷跳转（info/res_a/buff_a/upg_a/rst_a/ach/atb/aux）
+- 虚拟路径系统：`cd` / `~` / `show` / `tree` / 目录名与别名简写（`cd a`、`cd buff_a`） / 快捷跳转 / `collapse` 折叠树
 - 资源 `a` 实时增长、增长率公式（乘子 Π + 加数 Σ）、科学计数法与峰值统计
 - 购买项 Ba1-1 / Ba1-2 / Ua1-1 / Ua1-2，Func25 实时配色（可购买价绿、已购编号绿、资源名加粗）
 - 命令补全（Ax4）、语法高亮（Ax12）、资源名加粗（Ax13）、预计倒计时（Ax2）、批量执行（Ax15）
-- 资源增长曲线（rishow_a / Ax6）、美化文件夹树（Ax7）
+- 资源增长曲线（`rishow_a` / Ax6 单行 sparkline）、美化文件夹树（Ax7 / Ax16）
 - 存档：多存档多槽位、加密、导入导出、离线进度；dev 模式（密码校验）
-- 背景音乐：HTML5 Audio 播放 7 首曲目，列表 / 单曲 / 随机模式、音量、底栏状态
-- 独立浮层窗口：滚动新闻（Ax/ Func21）、分屏终端（Ax11）、游戏外购买提醒（Ax9，虚拟标题栏可拖动、关闭无效）
-- 自定义命令（Ax10，cmd.add/del/list）、Ax1–Ax16 辅助功能开关
+- 辅助功能 Ax1–Ax16 开关，含终端内购买提醒（Ax8）、游戏外浮层提醒（Ax9）、分屏镜像（Ax11）、自定义命令（Ax10）
+- 独立浮层窗口：滚动新闻、分屏终端、购买提醒（虚拟标题栏可拖动、关闭键无效）
+- 配色主题：`color`（查看）/ `color default|ocean|amber|mono`（切换），设置持久化
+- 底部状态栏实时显示玩家、槽位、当前路径、资源数量与速度、时间
+
+## 界面
+
+深底终端风格：终端外壳标题栏、细网格与扫描线、渐变描边与辉光、流程卡片、浮层窗口、状态栏脉冲指示；滚动新闻条目之间留 10 空格 + 菱形分隔。适配窄屏，并遵循 `prefers-reduced-motion`。
 
 ## 运行
 
@@ -22,20 +29,20 @@
 ## 目录
 
 - `index.html` — 入口
-- `css/style.css` — 视觉样式（深底 + 皇家蓝/水蓝主题）
-- `js/core.js` — 内核（状态、购买、路径、存档、数字格式化）
-- `js/terminal.js` — 模拟终端（历史、live 行、输入、补全）
-- `js/audio.js` — 背景音乐
-- `js/windows.js` — 浮层窗口（新闻/分屏/提醒）
-- `js/main.js` — 流程与命令分发
-- `assets/audio/` — 音乐文件
+- `css/style.css` — 视觉样式（深底 + 皇家蓝/水蓝主题，配色变量随 `color` 命令切换）
+- `js/core.js` — 内核（状态、购买、路径、存档、数字格式化、主题）
+- `js/terminal.js` — 模拟终端（历史、可替换视图区、live 行、输入、补全）
+- `js/windows.js` — 浮层窗口（新闻 / 分屏 / 提醒）
+- `js/main.js` — 流程与命令分发、游戏循环、状态栏
+- `assets/` — 预留资源目录（音频已移除）
 
 ## 来源
 
-原 C++ 源码位于相邻目录 `../ConsoleIncremental`（不在本仓库内），移植参考其中的 `main.cpp`、`save_manager.h`、`audio_player.cpp`、`news_window.cpp`、`split_window.cpp`、`toast_window.cpp` 及策划案 `doc/Console Incremental策划案.docx`。
+原 C++ 源码位于相邻目录 `../ConsoleIncremental`（不在本仓库内），移植参考其中的 `main.cpp`、`save_manager.h`、`news_window.cpp`、`split_window.cpp`、`toast_window.cpp` 及策划案 `doc/Console Incremental策划案.docx`。
 
 ## 与原版的差异
 
-- 用浏览器 `<audio>` 替代 Media Foundation；FLAC 曲目在不支持的浏览器上会自动跳到下一首。
-- 存档由加密 `.dat` 文件改为浏览器 localStorage（同样加密）；导入/导出落在浏览器本地键下。
-- 多窗口由 Win32 弹窗改为 DOM 浮层，虚拟标题栏保留“关闭键无效、可拖动”的行为。
+- 存档由加密 `.dat` 文件改为浏览器 localStorage（同样加密）；导入/导出落在浏览器本地键 `ci_export_<路径>` 下。
+- 多窗口由 Win32 弹窗改为 DOM 浮层，虚拟标题栏保留「关闭键无效、可拖动」的行为。
+- 背景音乐按需求整体移除（原版为 Media Foundation 播放器）。
+- 目录内容采用「可替换视图区」：切换目录时整块重绘当前目录，避免实时行堆积；命令历史保留为滚动日志。

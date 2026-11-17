@@ -33,6 +33,12 @@ save/
 *.dat
 *.log
 
+# ===== 背景音乐资源（本版本已移除音乐系统）=====
+*.mp3
+*.flac
+*.wav
+*.ogg
+
 # ===== Web 前端 =====
 node_modules/
 dist/

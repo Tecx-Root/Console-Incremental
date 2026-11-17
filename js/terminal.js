@@ -1,5 +1,7 @@
 /* Console Incremental — 浏览器模拟终端 (对应 C++ console_renderer + 主循环 UI)
  * 暴露 window.INC.term。
+ * 视图区（view）：由 beginView/endView 包住的「当前目录内容」，切目录时整块替换，
+ * 避免 live 行无限堆积；命令历史与回显保留在视图区之外。
  */
 (function (global) {
   'use strict';
@@ -12,6 +14,7 @@
   var cmdCb = null, completionCb = null;
   var promptText = '~ $ ';
   var atBottom = true;
+  var view = { start: -1, end: -1 }, inView = false;
 
   function seg(text, colorKey) { return { t: String(text), c: colorKey || 'Front' }; }
   function normalize(segs, colorKey) {
@@ -109,20 +112,24 @@
     if (!segs.length) div.appendChild(document.createTextNode('\u00a0'));
     return div;
   }
+  function removeEntry(en) {
+    if (en.node && en.node.parentNode) en.node.parentNode.removeChild(en.node);
+  }
+  function commit(entry) {
+    entries.push(entry);
+    el.insertBefore(entry.node, inputLine);
+    if (inView) view.end = entries.length;
+    scrollBottom();
+    return entry;
+  }
 
   function push(segs, colorKey) {
     var arr = normalize(segs, colorKey);
-    var node = makeLineNode(arr);
-    entries.push({ node: node });
-    el.insertBefore(node, inputLine);
-    scrollBottom();
+    return commit({ node: makeLineNode(arr), segs: arr });
   }
-  function pushLive(generator) {
-    var node = makeLineNode(generator());
-    entries.push({ node: node, live: generator, lastKey: '' });
-    el.insertBefore(node, inputLine);
-    scrollBottom();
-    return entries[entries.length - 1];
+  function pushLive(generator, group) {
+    var arr = normalize(generator());
+    return commit({ node: makeLineNode(arr), segs: arr, live: generator, lastKey: '', group: group || '' });
   }
   function blank() { push('\u00a0', 'Front'); }
 
@@ -148,6 +155,21 @@
     push([seg(bot, colorKey)]);
   }
 
+  // ---------- 视图区 ----------
+  function dropView() {
+    if (view.start < 0) return;
+    var end = Math.min(view.end, entries.length);
+    var removed = entries.splice(view.start, Math.max(0, end - view.start));
+    removed.forEach(removeEntry);
+    view.start = -1; view.end = -1;
+  }
+  function beginView() {
+    dropView();
+    view.start = entries.length; view.end = entries.length; inView = true;
+  }
+  function endView() { view.end = entries.length; inView = false; }
+  function clearView() { dropView(); inView = false; }
+
   function setPrompt(text) { promptText = text; if (promptEl) promptEl.textContent = text; }
   function onCommand(cb) { cmdCb = cb; }
   function onCompletion(cb) { completionCb = cb; }
@@ -155,24 +177,45 @@
   function scrollBottom() { if (el) el.scrollTop = el.scrollHeight; }
   function clear() {
     entries = [];
+    view.start = -1; view.end = -1; inView = false;
     if (el) Array.prototype.slice.call(el.childNodes).forEach(function (n) {
       if (n !== inputLine) el.removeChild(n);
     });
   }
   function setInput(v) { if (input) { input.value = v; if (completionCb) completionCb('input', v); } }
   function getInput() { return input ? input.value : ''; }
+  function lineText(en) {
+    var arr = en.live ? normalize(en.live()) : (en.segs || []);
+    en.segs = arr;
+    return arr.map(function (s) { return s.t; }).join('');
+  }
+  // 最近 n 行纯文本（供分屏镜像）
+  function recentLines(n) {
+    return entries.slice(-Math.max(1, n)).map(lineText);
+  }
+  function repaint() {
+    if (!el) return;
+    entries.forEach(function (en) {
+      var arr = en.live ? normalize(en.live()) : (en.segs || []);
+      en.segs = arr;
+      var fresh = makeLineNode(arr);
+      if (en.node && en.node.parentNode) el.replaceChild(fresh, en.node);
+      en.node = fresh;
+    });
+  }
 
   function render() {
     var changed = false;
     for (var i = 0; i < entries.length; i++) {
       var en = entries[i];
       if (!en.live) continue;
-      var segs = en.live();
+      var segs = normalize(en.live());
+      en.segs = segs;
       var key = segs.map(function (s) { return s.t + '|' + s.c + '|' + (s.bold || ''); }).join('\u0000');
       if (key === en.lastKey) continue;
       en.lastKey = key;
       var fresh = makeLineNode(segs);
-      el.replaceChild(fresh, en.node);
+      if (en.node && en.node.parentNode) el.replaceChild(fresh, en.node);
       en.node = fresh;
       changed = true;
     }
@@ -181,9 +224,11 @@
 
   global.INC.term = {
     init: init, push: push, pushLive: pushLive, blank: blank, box: box,
+    beginView: beginView, endView: endView, clearView: clearView,
     setPrompt: setPrompt, onCommand: onCommand, onCompletion: onCompletion,
-    focus: focus, render: render, clear: clear, scrollBottom: scrollBottom,
-    setInput: setInput, getInput: getInput, seg: seg, width: width,
-    getState: function () { return { history: cmdHistory }; }
+    focus: focus, render: render, repaint: repaint, clear: clear,
+    scrollBottom: scrollBottom, setInput: setInput, getInput: getInput,
+    seg: seg, width: width, recentLines: recentLines,
+    getState: function () { return { history: cmdHistory, lines: entries.length }; }
   };
 })(window);

@@ -5,12 +5,42 @@
   'use strict';
 
   // ---- 调色板：与 C++ console_renderer.cpp 的 16 色主题一致 ----
-  var PALETTE = {
+  var BASE_PALETTE = {
     BG: '#0b0e14', ROYAL: '#4169e1', PALE_GREEN: '#a1ecab', AQUA_SKY: '#86b8ef',
     RED_DUSTED: '#de6663', PURPLE: '#b98cff', PALE_YELLOW: '#f0d456', FRONT: '#e6ebf2',
     PANEL: '#63759c', L_BLUE: '#7e9bff', L_GREEN: '#62f06c', L_AQUA: '#afd4ff',
     L_RED: '#ff9b98', L_PURPLE: '#e0b3ff', L_YELLOW: '#ffd86b', BRIGHT: '#ffffff'
   };
+  // 可选主题（color <名称>）。仅覆盖差异色，其余沿用默认。
+  var THEMES = {
+    default: {},
+    ocean: {
+      BG: '#07161c', ROYAL: '#1f8fb0', PALE_GREEN: '#8ef0c4', AQUA_SKY: '#6fd9e8',
+      RED_DUSTED: '#e5736a', PALE_YELLOW: '#ecd885', FRONT: '#dff2f6', PANEL: '#4d8b9c',
+      L_BLUE: '#5ad1e6', L_GREEN: '#66f0a8', L_AQUA: '#a9e9f5', L_RED: '#ffa39c'
+    },
+    amber: {
+      BG: '#16100a', ROYAL: '#d08020', PALE_GREEN: '#cfe49a', AQUA_SKY: '#f0c060',
+      RED_DUSTED: '#e07050', PALE_YELLOW: '#ffd86b', FRONT: '#f2e2c4', PANEL: '#a08050',
+      L_BLUE: '#ffcf7a', L_GREEN: '#b6e878', L_AQUA: '#ffe0a0', L_RED: '#ffab90'
+    },
+    mono: {
+      BG: '#101010', ROYAL: '#7d7d7d', PALE_GREEN: '#c8c8c8', AQUA_SKY: '#c0c0c0',
+      RED_DUSTED: '#a8a8a8', PALE_YELLOW: '#e0e0e0', FRONT: '#e8e8e8', PANEL: '#808080',
+      L_BLUE: '#b0b0b0', L_GREEN: '#d0d0d0', L_AQUA: '#d8d8d8', L_RED: '#bcbcbc',
+      PURPLE: '#a0a0a0', L_PURPLE: '#cccccc', L_YELLOW: '#e4e4e4'
+    }
+  };
+  var PALETTE = {}, themeName = 'default';
+  function setTheme(name) {
+    if (!THEMES[name]) return false;
+    Object.keys(BASE_PALETTE).forEach(function (k) { PALETTE[k] = BASE_PALETTE[k]; });
+    Object.keys(THEMES[name]).forEach(function (k) { PALETTE[k] = THEMES[name][k]; });
+    themeName = name;
+    return true;
+  }
+  function getTheme() { return themeName; }
+  setTheme('default');
   var C = {
     Front: 'FRONT', Gray: 'PANEL', Panel: 'PANEL', BG: 'BG', Black: 'BG', White: 'FRONT',
     LightGreen: 'L_GREEN', LightRed: 'L_RED', AquaSky: 'AQUA_SKY', LightCyan: 'L_AQUA',
@@ -267,6 +297,32 @@
   }
   function promptPrefix(g) { return g.cwd + ' $ '; }
 
+  // 目录名 / 快捷别名 → 完整路径（策划案：cd <路径> 通常可简写）
+  var PATH_ALIASES = {
+    info: 'information', res_a: 'a_resource', buff_a: 'a_buff', upg_a: 'a_upgrade',
+    rst_a: 'a_reset', ach: 'achievement', atb: 'autobuyer', aux: 'auxiliary'
+  };
+  function allPaths() {
+    var out = ['~'], queue = ['~'], guard = 0;
+    while (queue.length && guard++ < 500) {
+      var p = queue.shift();
+      getChildren(p).forEach(function (c) {
+        var child = p + '\\' + c;
+        out.push(child); queue.push(child);
+      });
+    }
+    return out;
+  }
+  function findPath(name) {
+    var target = PATH_ALIASES[name] || name;
+    var paths = allPaths();
+    for (var i = 0; i < paths.length; i++) {
+      var parts = splitPath(paths[i]);
+      if (parts[parts.length - 1] === target) return paths[i];
+    }
+    return null;
+  }
+
   var AX_LABELS = {
     Ax1: '购买项颜色变化', Ax2: '购买项预计可购买倒计时',
     Ax3: '每移动到一个新目录，就自动显示该目录下的内容', Ax4: '命令行命令补全',
@@ -411,7 +467,9 @@
 
   global.INC = global.INC || {};
   global.INC.core = {
-    PALETTE: PALETTE, C: C, css: css, fmtNum: fmtNum, fmtRes: fmtRes, parseNum: parseNum,
+    PALETTE: PALETTE, C: C, css: css, THEMES: THEMES,
+    setTheme: setTheme, getTheme: getTheme,
+    fmtNum: fmtNum, fmtRes: fmtRes, parseNum: parseNum,
     formatDuration: formatDuration, formatCountdown: formatCountdown,
     createState: createState, nowString: nowString, parseTime: parseTime,
     BUY_ITEMS: BUY_ITEMS, findBuyItem: findBuyItem, buyCount: buyCount,
@@ -419,6 +477,7 @@
     estimateAffordText: estimateAffordText, affordableItems: affordableItems,
     splitPath: splitPath, stripGame1Xri: stripGame1Xri, getChildren: getChildren,
     pathExists: pathExists, normalizePath: normalizePath, promptPrefix: promptPrefix,
+    PATH_ALIASES: PATH_ALIASES, allPaths: allPaths, findPath: findPath,
     AX_LABELS: AX_LABELS, auxiliaryLineSegments: auxiliaryLineSegments,
     SLOT_COUNT: SLOT_COUNT, DEV_PASSWORD: DEV_PASSWORD,
     listSaves: listSaves, createSave: createSave, saveExists: saveExists, deleteSave: deleteSave,

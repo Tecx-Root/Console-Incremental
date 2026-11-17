@@ -5,6 +5,8 @@
 (function (global) {
   'use strict';
 
+  // 新闻之间的间隔：前后各留 10 个空格，配一个菱形分隔，避免条目挤在一起
+  var NEWS_SEPARATOR = '          ◆          ';
   var newsItems = [
     '据本台记者报道，近日，一名外国小哥竟然惊奇地发现————————————杯子是用来喝水的',
     '1+1=?',
@@ -14,11 +16,20 @@
   ];
 
   var newsWin = null, newsTimer = null, newsRunning = false;
-  var splitWins = [], splitRunning = false;
-  var toastEl = null, toastTimer = null;
+  var splitWins = [], splitRunning = false, splitRenderFn = null;
+  var toastEl = null, toastBody = null, toastTimer = null;
   var zTop = 100;
 
-  function makeTitlebar(title, onDragHandle) {
+  // 全局拖拽：只注册一次监听，避免每次创建标题栏都往 document 上堆监听
+  var drag = { win: null, offX: 0, offY: 0 };
+  document.addEventListener('mousemove', function (e) {
+    if (!drag.win) return;
+    drag.win.style.left = (e.clientX - drag.offX) + 'px';
+    drag.win.style.top = (e.clientY - drag.offY) + 'px';
+  });
+  document.addEventListener('mouseup', function () { drag.win = null; });
+
+  function makeTitlebar(title) {
     var bar = document.createElement('div');
     bar.className = 'win-titlebar';
     var t = document.createElement('span');
@@ -32,22 +43,15 @@
     x.addEventListener('click', function (e) { e.stopPropagation(); });
     bar.appendChild(t);
     bar.appendChild(x);
-    // 手动拖拽（对不可聚焦/浮层窗口可靠）
-    var dragging = false, offX = 0, offY = 0;
     bar.addEventListener('mousedown', function (e) {
       if (e.target === x) return;
-      dragging = true;
-      offX = e.clientX - bar.parentNode.offsetLeft;
-      offY = e.clientY - bar.parentNode.offsetTop;
-      bar.parentNode.style.zIndex = ++zTop;
+      var win = bar.parentNode;
+      drag.win = win;
+      drag.offX = e.clientX - win.offsetLeft;
+      drag.offY = e.clientY - win.offsetTop;
+      win.style.zIndex = ++zTop;
       e.preventDefault();
     });
-    document.addEventListener('mousemove', function (e) {
-      if (!dragging || !bar.parentNode) return;
-      bar.parentNode.style.left = (e.clientX - offX) + 'px';
-      bar.parentNode.style.top = (e.clientY - offY) + 'px';
-    });
-    document.addEventListener('mouseup', function () { dragging = false; });
     return bar;
   }
 
@@ -58,7 +62,7 @@
     newsRunning = true;
     newsWin = document.createElement('div');
     newsWin.className = 'float-win news-win';
-    newsWin.style.left = (window.innerWidth - 460) + 'px';
+    newsWin.style.left = Math.max(8, window.innerWidth - 460) + 'px';
     newsWin.style.top = '20px';
     newsWin.style.zIndex = ++zTop;
     newsWin.appendChild(makeTitlebar('滚动新闻'));
@@ -68,7 +72,7 @@
     track.className = 'news-track';
     var text = document.createElement('span');
     text.className = 'news-text';
-    text.textContent = newsItems.join('    ◆    ') + '    ◆    ';
+    text.textContent = newsItems.join(NEWS_SEPARATOR) + NEWS_SEPARATOR;
     track.appendChild(text);
     track.appendChild(text.cloneNode(true));
     body.appendChild(track);
@@ -76,7 +80,7 @@
     document.body.appendChild(newsWin);
     var pos = 0;
     newsTimer = setInterval(function () {
-      pos -= 1;
+      pos -= 1.5;
       var half = text.offsetWidth;
       if (half > 0 && -pos >= half) pos += half;
       track.style.transform = 'translateX(' + pos + 'px)';
@@ -91,17 +95,18 @@
   }
   function newsIsRunning() { return newsRunning; }
 
-  // ---------- 分屏终端窗口（镜像主终端文本）----------
+  // ---------- 分屏终端窗口（镜像主终端最近输出）----------
   function splitStart(count, renderFn) {
+    if (renderFn) splitRenderFn = renderFn;
     splitRunning = count > 1;
-    // 数量调整
+    var cols = Math.max(1, Math.floor((window.innerWidth * 0.42) / 372));
     while (splitWins.length < count - 1) {
-      var idx = splitWins.length; // 0 = 分屏2
+      var idx = splitWins.length;
       var w = document.createElement('div');
       w.className = 'float-win split-win';
-      var perCol = Math.max(1, Math.ceil((count - 1) / (count > 4 ? 2 : 1)));
-      w.style.left = (window.innerWidth * 0.55 + (idx % 2) * 380) + 'px';
-      w.style.top = (20 + Math.floor(idx / 2) * 300) + 'px';
+      var col = idx % cols, row = Math.floor(idx / cols);
+      w.style.left = Math.min(window.innerWidth - 370, window.innerWidth * 0.55 + col * 372) + 'px';
+      w.style.top = (20 + row * 290) + 'px';
       w.style.width = '360px';
       w.style.height = '260px';
       w.style.zIndex = ++zTop;
@@ -117,14 +122,14 @@
       if (rem.el.parentNode) rem.el.parentNode.removeChild(rem.el);
     }
     if (count <= 1) splitRunning = false;
-    splitRefresh(renderFn);
+    splitRefresh();
   }
   function splitRefresh(renderFn) {
-    if (!renderFn) return;
+    if (renderFn) splitRenderFn = renderFn;
+    if (!splitRenderFn) return;
     splitWins.forEach(function (sw, i) {
-      sw.body.innerHTML = '';
-      var html = renderFn(i);
-      if (typeof html === 'string') sw.body.innerHTML = html;
+      var html = splitRenderFn(i);
+      if (typeof html === 'string' && sw.body.innerHTML !== html) sw.body.innerHTML = html;
     });
   }
   function splitStop() {
@@ -134,21 +139,20 @@
   }
   function splitIsRunning() { return splitRunning; }
 
-  // ---------- 购买提醒 toast（Ax9 游戏外提醒，样式参考消息弹窗）----------
+  // ---------- 购买提醒 toast（Ax9 游戏外提醒）----------
+  function ensureToast() {
+    if (toastEl) return;
+    toastEl = document.createElement('div');
+    toastEl.className = 'toast-win';
+    toastEl.appendChild(makeTitlebar('购买提醒'));
+    toastBody = document.createElement('div');
+    toastBody.className = 'toast-body';
+    toastEl.appendChild(toastBody);
+    document.body.appendChild(toastEl);
+  }
   function toastShow(text, durationMs) {
-    if (!toastEl) {
-      toastEl = document.createElement('div');
-      toastEl.className = 'toast-win';
-      document.body.appendChild(toastEl);
-    }
-    var title = makeTitlebar('购买提醒');
-    // 复用已有 titlebar：若重建则清空
-    toastEl.innerHTML = '';
-    toastEl.appendChild(title);
-    var body = document.createElement('div');
-    body.className = 'toast-body';
-    body.textContent = text;
-    toastEl.appendChild(body);
+    ensureToast();
+    toastBody.textContent = text;
     toastEl.style.right = '24px';
     toastEl.style.bottom = '24px';
     toastEl.style.zIndex = ++zTop;

@@ -1,25 +1,30 @@
 /* Console Incremental — 主程序：流程 + 命令分发 + 游戏循环
  * 移植自 C++ main.cpp（executeCommand / showLeaf / showDir / welcome / name / slot / game / 主循环）。
+ * 本版本不含背景音乐：音乐模块、music/vol 命令与音频资源已整体移除。
  */
 (function (global) {
   'use strict';
   var INC = global.INC;
-  var core = INC.core, term = INC.term, audio = INC.audio, windows = INC.windows;
+  var core = INC.core, term = INC.term, windows = INC.windows;
   var C = core.C, css = core.css, seg = term.seg;
 
   var G_SPARK = '◆', G_BULLET = '▸', G_DOT = '●';
   var VERSION = '0.0.1-alpha';
+  var THEME_KEY = 'ci_html_theme_v1';
 
   var state = core.createState();
   var playerName = '';
   var currentSlot = 1;
   var devPasswordPending = false;
   var remindLast = {}, remindStep = {};
+  var remindAx8At = 0, remindAx8Sig = '';
   var resHistory = [];
   var treeCollapsed = {};
   var lastTick = 0;
   var lastAutoSave = 0;
   var lastToastCheck = 0;
+  var lastSplitRefresh = 0;
+  var lastStatusRefresh = 0;
   var inShell = false;
 
   // 补全状态
@@ -28,13 +33,13 @@
   // ---------- 全局命令表（用于补全 / 红底判定）----------
   var GLOBAL_CMDS = [
     'help', 'tutorial on', 'tutorial off', 'version', 'save.info', 'slot.info', 'game.info',
-    'color', 'news on', 'news off', 'cls', 'clear', 'exit', 'olpg on', 'olpg off',
+    'color', 'color default', 'color ocean', 'color amber', 'color mono',
+    'news on', 'news off', 'cls', 'clear', 'exit', 'olpg on', 'olpg off',
     'save', 'save.hardreset', 'slot.hardreset', 'export save -p ', 'import save -p ',
     'export slot -p ', 'import slot -p ', 'tree', 'cd ', '~', 'show', 'info', 'atb',
     'res_a', 'buff_a', 'upg_a', 'rst_a', 'ach', 'aux', 'Ax_all on', 'Ax_all off',
     'rishow_a', 'warn', 'warn -min', 'warn -min=', 'dev.start',
-    'music', 'music.p=', 'music.mode=s-loop', 'music.mode=l-loop', 'music.mode=random',
-    'music on', 'music off', 'vol +', 'vol -', 'echo ', 'date', 'time',
+    'echo ', 'date', 'time', 'collapse ',
     'cmd', 'cmd.add ', 'cmd.del ', 'cmd.rm ', 'cmd.list', 'scr.num=',
     'Ax1 on', 'Ax1 off', 'Ax2 on', 'Ax2 off', 'Ax3 on', 'Ax3 off', 'Ax4 on', 'Ax4 off',
     'Ax5 on', 'Ax5 off', 'Ax6 on', 'Ax6 off', 'Ax7 on', 'Ax7 off', 'Ax8 on', 'Ax8 off',
@@ -47,8 +52,53 @@
   });
   GLOBAL_CMDS = GLOBAL_CMDS.filter(function (v, i, a) { return a.indexOf(v) === i; }).sort();
 
+  // ---------- 主题 ----------
+  var CSS_VAR_MAP = {
+    '--bg': 'BG', '--fg': 'FRONT', '--royal': 'ROYAL', '--aqua': 'AQUA_SKY',
+    '--panel': 'PANEL', '--line': 'ROYAL', '--bad': 'RED_DUSTED', '--deep': 'BG',
+    '--warn': 'PALE_YELLOW', '--good': 'PALE_GREEN'
+  };
+  function syncCssTheme() {
+    var root = document.documentElement;
+    Object.keys(CSS_VAR_MAP).forEach(function (v) {
+      var val = core.PALETTE[CSS_VAR_MAP[v]];
+      if (v === '--line') val = mix(val, core.PALETTE.BG, 0.72);
+      if (v === '--deep') val = mix(val, '#000000', 0.45);
+      root.style.setProperty(v, val);
+    });
+  }
+  function mix(a, b, t) {
+    function rgb(h) { return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
+    var x = rgb(a), y = rgb(b);
+    return '#' + x.map(function (v, i) {
+      return Math.round(v * (1 - t) + y[i] * t).toString(16).padStart(2, '0');
+    }).join('');
+  }
+  function applyTheme(name, quiet) {
+    if (!core.setTheme(name)) {
+      if (!quiet) term.push([seg('未知主题：' + name + '（可用：' + Object.keys(core.THEMES).join(' / ') + '）', C.RedDusted)]);
+      return false;
+    }
+    syncCssTheme();
+    term.repaint();
+    try { localStorage.setItem(THEME_KEY, name); } catch (e) {}
+    if (!quiet) term.push([seg(G_DOT + ' 配色主题已设为 ' + name + '。', C.PaleGreen)]);
+    return true;
+  }
+
   // ---------- 目录内容渲染 ----------
-  function curvePanel(live) {
+  function sparkline(vals, W) {
+    var chars = '▁▂▃▄▅▆▇█';
+    var v = vals.slice(-W);
+    if (!v.length) return '（采样中）';
+    var logs = v.map(function (x) { return Math.log10(Math.max(1, x)); });
+    var lo = Math.min.apply(null, logs), hi = Math.max.apply(null, logs);
+    if (hi - lo < 1e-9) hi = lo + 1e-9;
+    return logs.map(function (l) {
+      return chars[Math.max(0, Math.min(7, Math.round((l - lo) / (hi - lo) * 7)))];
+    }).join('');
+  }
+  function curvePanel() {
     // 资源增长曲线（Func9 / Ax6），用 log10 折线近似
     var W = 46, H = 8;
     var vals = resHistory.length ? resHistory.slice(-W) : [0];
@@ -81,24 +131,29 @@
         var sd = core.readSlot(playerName, i);
         term.push([seg('  槽位' + i + ': ' + ((sd && sd.lastSaved) || '(空)'), C.Front)]);
       });
+      term.push([seg('  配色主题：' + core.getTheme(), C.Front)]);
     } else if (path === '~\\game1-xri\\a\\a_resource') {
+      term.push([seg('── 资源 a ──', C.PaleYellow)]);
+      term.pushLive(function () {
+        return [seg('  资源 a   : ', C.Front), seg(core.fmtNum(state.a.amount), C.BrightWhite)];
+      }, 'view');
+      term.pushLive(function () {
+        return [seg('  速度     : +', C.Front), seg(core.fmtNum(state.a.rate) + '/s', C.Front)];
+      }, 'view');
+      term.pushLive(function () {
+        return [seg('  历史峰值 : ', C.Front), seg(core.fmtNum(state.maxAmountA), C.PaleYellow)];
+      }, 'view');
       if (state.auxOn.Ax6) {
-        curvePanel();
-        term.pushLive(function () { return [seg('资源 a   : ', C.Front), seg(core.fmtNum(state.a.amount), C.BrightWhite)]; });
-        term.pushLive(function () { return [seg('速度     : +', C.Front), seg(core.fmtNum(state.a.rate) + '/s', C.Front)]; });
-        term.pushLive(function () { return [seg('历史峰值 : ', C.Front), seg(core.fmtNum(state.maxAmountA), C.PaleYellow)]; });
-      } else {
-        term.box(' RESOURCE STATUS ', [
-          [seg('资源 a   : ', C.Front)],
-          [seg('速度     : +', C.Front)]
-        ], { color: C.PaleGreen, width: 40 });
-        term.pushLive(function () { return [seg('  资源 a   : ', C.Front), seg(core.fmtNum(state.a.amount), C.BrightWhite)]; });
-        term.pushLive(function () { return [seg('  速度     : +', C.Front), seg(core.fmtNum(state.a.rate) + '/s', C.Front)]; });
+        term.pushLive(function () {
+          return [seg('  增长曲线 : ', C.Front), seg(sparkline(resHistory, 46), C.AquaSky)];
+        }, 'view');
       }
     } else if (path === '~\\game1-xri\\a\\a_buff' || path === '~\\game1-xri\\a\\a_upgrade') {
       term.push([seg(path.indexOf('a_buff') >= 0 ? 'a 类可重复购买的购买项：' : 'a 类升级信息：', C.PaleYellow)]);
       var items = core.BUY_ITEMS.filter(function (it) { return it.path === path; });
-      items.forEach(function (it) { term.pushLive(function () { return core.buyItemSegments(it, state); }); });
+      items.forEach(function (it) {
+        term.pushLive(function () { return core.buyItemSegments(it, state); }, 'view');
+      });
       if (!items.length) term.push([seg('  暂无购买项。', C.Gray)]);
     } else if (path === '~\\game1-xri\\a\\a_reset') {
       term.push([seg('a 类声望层（层级重置）信息：', C.PaleYellow)]);
@@ -112,7 +167,7 @@
     } else if (path === '~\\game1-xri\\auxiliary') {
       term.push([seg('辅助功能（以下功能存于 ~\\game1-xri\\auxiliary 目录，均可用命令控制开启/关闭）：', C.PaleYellow)]);
       Object.keys(core.AX_LABELS).forEach(function (id) {
-        term.pushLive(function () { return core.auxiliaryLineSegments(state, id); });
+        term.pushLive(function () { return core.auxiliaryLineSegments(state, id); }, 'view');
       });
       term.blank();
       term.push([seg('用法：在 aux 目录下输入  AxN on  或  AxN off  切换开关。', C.Gray)]);
@@ -128,13 +183,20 @@
       children.forEach(function (c) { term.push([seg('  ' + c, C.Front)]); });
     } else showLeaf(path);
   }
+  // 视图区整块替换：切目录不会残留上一目录的实时行
+  function showView(path) {
+    term.beginView();
+    try { showDir(path); } finally { term.endView(); }
+  }
   function showDirAuto(path) {
-    if (core.getChildren(path).length) { showDir(path); return; }
+    if (core.getChildren(path).length) { showView(path); return; }
     if (!state.auxOn.Ax3) {
-      term.push([seg('（Ax3 已关闭，未自动显示该目录内容；输入 show 查看）', C.Gray)]);
+      term.beginView();
+      try { term.push([seg('（Ax3 已关闭，未自动显示该目录内容；输入 show 查看）', C.Gray)]); }
+      finally { term.endView(); }
       return;
     }
-    showDir(path);
+    showView(path);
   }
   function navigateTo(path) {
     state.cwd = path;
@@ -154,14 +216,16 @@
   function folderContentLabel(path) {
     var p = core.stripGame1Xri(path);
     var M = {
-      '~\\game1-xri\\information': '游戏说明文档（info）',
-      '~\\game1-xri\\automation\\autobuyer': '自动购买器配置（atb）',
-      '~\\game1-xri\\a\\a_resource': '资源 a 数据（res_a）',
-      '~\\game1-xri\\a\\a_reset': '重置操作（rst_a）',
-      '~\\game1-xri\\achievement': '成就条目（ach）',
-      '~\\game1-xri\\auxiliary': '辅助功能开关（Ax1–Ax16）'
+      '~\\information': '游戏说明文档（info）',
+      '~\\automation\\autobuyer': '自动购买器配置（atb）',
+      '~\\a\\a_resource': '资源 a 数据（res_a）',
+      '~\\a\\a_reset': '重置操作（rst_a）',
+      '~\\achievement': '成就条目（ach）',
+      '~\\auxiliary': '辅助功能开关（Ax1–Ax16）',
+      '~\\a\\a_buff': '可重复购买项（buff_a）',
+      '~\\a\\a_upgrade': '升级项（upg_a）'
     };
-    return M[p] || '';
+    return M[p] || M[path] || '';
   }
   function printTree(path, indent, isLast) {
     var dirs = core.getChildren(path);
@@ -185,13 +249,21 @@
       term.push([seg(indent + (last ? '└── ' : '├── ') + s, C.Front)]);
     });
   }
+  function resolveCd(cwd, arg) {
+    // 1) 常规相对 / 绝对路径
+    var np = core.normalizePath(cwd, arg);
+    if (core.pathExists(np)) return np;
+    // 2) 目录名或快捷别名简写，在整棵虚拟目录树里查找
+    var hit = core.findPath(arg.replace(/[\\\/]/g, ''));
+    return hit;
+  }
 
   // ---------- 帮助 ----------
   var HELP_CATS = {
     'c -basic': { title: ' 基本命令 ', w: 60, lines: [
       'help            查看所有命令及功能', 'tutorial on/off 教程开关', 'version         查看游戏版本',
       'save.info       查看当前存档信息', 'slot.info       查看当前存档槽位信息',
-      'game.info       查看当前的小游戏信息', 'color           改变颜色', 'news on/off     新闻开/关',
+      'game.info       查看当前的小游戏信息', 'color [名称]    查看/切换配色主题', 'news on/off     新闻开/关',
       'cls/clear       清屏', 'exit/ESC        退出游戏'
     ] },
     'c -save': { title: ' 存档相关 ', w: 64, lines: [
@@ -216,26 +288,22 @@
       'Ax_all on/off 开启/关闭所有辅助功能', 'warn -min 显示购买提醒最小间隔（秒）',
       'warn -min=N 设置购买提醒最小间隔（秒）', 'rishow_a 显示a资源增长曲线',
       'show 显示当前目录下的内容（不受Ax3开关影响）',
-      'scr.num=… 分配数量（需解锁Ax11）', 'cmd/cmd.add/cmd.del/cmd.list 自定义命令（须先开启Ax10）'
-    ] },
-    'c -music': { title: ' 音乐相关 ', w: 66, lines: [
-      'music 查看音乐列表', 'music.p=N 播放某编号音乐',
-      'music.mode=s-loop/l-loop/random 设置音乐播放模式为单曲循环/列表循环/随机播放',
-      'music on/off 音乐开/关', 'vol +/- 放大/降低背景音乐音量'
+      'scr.num=… 分配数量（需解锁Ax11）', 'cmd/cmd.add/cmd.del/cmd.list 自定义命令（须先开启Ax10）',
+      'collapse <路径> 折叠/展开 tree 中的文件夹'
     ] },
     'c -others': { title: ' 其他命令 ', w: 56, lines: [
-      'echo <文本> 打印一条信息', 'date 显示当前日期（实时）', 'time 显示当前时间（实时）'
+      'echo <文本> 打印一条信息', 'date 显示当前日期（实时）', 'time 显示当前时间（实时）',
+      'color 查看当前配色主题', 'color default/ocean/amber/mono 切换配色主题'
     ] },
     'c -dev': { title: ' dev命令 ', w: 60, lines: [] }
   };
   function help() {
     term.box(' HELP ', [
-      seg(G_BULLET + ' c -basic   查看基本命令', C.Front),
-      seg(G_BULLET + ' c -save    查看存档相关命令', C.Front),
-      seg(G_BULLET + ' c -action  查看游戏操作相关命令', C.Front),
-      seg(G_BULLET + ' c -music   查看音乐相关命令', C.Front),
-      seg(G_BULLET + ' c -others  查看其他命令', C.Front),
-      seg(G_BULLET + ' c -dev     查看dev命令', C.Front)
+      seg(G_BULLET + ' c -basic    查看基本命令', C.Front),
+      seg(G_BULLET + ' c -save     查看存档相关命令', C.Front),
+      seg(G_BULLET + ' c -action   查看游戏操作相关命令', C.Front),
+      seg(G_BULLET + ' c -others   查看其他命令', C.Front),
+      seg(G_BULLET + ' c -dev      查看dev命令', C.Front)
     ], { color: C.AquaSky, width: 42 });
     term.push([seg('输入以上命令之一以查看该分类下的全部命令。', C.PaleYellow)]);
   }
@@ -272,6 +340,10 @@
         term.push([seg(G_SPARK + ' 已批量购买 ' + it.id + ' ×' + done + '（请求 ' + times + ' 次，生效 ' + done + ' 次）：' + it.content + ' ' + it.effect(state), C.AquaSky)]);
       } else {
         term.push([seg(G_SPARK + ' 已购买 ' + it.id + '：' + it.content + ' ' + it.effect(state), C.AquaSky)]);
+      }
+      if (state.tutorialOn && state.tutorialStage < 2) {
+        state.tutorialStage = 2;
+        term.push([seg('教程：购买会提升资源 a 的获取速度，输入 res_a 可查看当前速度。', C.PaleGreen)]);
       }
     } else {
       var cnt0 = core.buyCount(state, it.id);
@@ -360,6 +432,7 @@
       term.push([seg('  资源 a 数量：' + core.fmtNum(state.a.amount), C.Front)]);
       term.push([seg('  资源 a 基础速度：' + core.fmtNum(state.a.rate) + ' /s', C.Front)]);
       term.push([seg('  存档创建时间：' + state.createdTime, C.Front)]);
+      term.push([seg('  配色主题：' + core.getTheme(), C.Front)]);
       return;
     }
     if (command === 'slot.info') {
@@ -392,7 +465,7 @@
       setTimeout(function () { flowSlot(); }, 400); return;
     }
 
-    // 导入/导出（HTML 版用剪贴板/提示，存档加密字符串）
+    // 导入/导出（HTML 版：加密串存于浏览器本地键，路径即键名）
     var exp = /^(export|import)\s+(save|slot)\s+-p\s+"?([^"]+)"?$/.exec(command);
     if (exp) {
       var action = exp[1], kind = exp[2], pathName = exp[3];
@@ -400,7 +473,7 @@
       if (action === 'export') {
         var data = core.exportData(playerName, kind === 'save' ? null : currentSlot);
         try { localStorage.setItem(key, data); } catch (e) {}
-        term.push([seg(G_DOT + ' 已导出' + kind + '到 ' + pathName + '（HTML 版存于浏览器本地）。', C.PaleGreen)]);
+        term.push([seg(G_DOT + ' 已导出' + kind + '到 ' + pathName + '（存于浏览器本地键 ' + key + '）。', C.PaleGreen)]);
       } else {
         var text = null; try { text = localStorage.getItem(key); } catch (e) {}
         if (text && core.importData(text, playerName, kind === 'save' ? null : currentSlot)) {
@@ -411,10 +484,15 @@
       return;
     }
 
+    // 配色主题
     if (command === 'color') {
-      term.push([seg('color 命令：HTML 版提供固定主题配色（深底 + 皇家蓝/水蓝）。', C.PaleYellow)]);
-      term.push([seg('可调主题：default（默认）—— 输入 color default', C.Gray)]); return;
+      term.push([seg('当前配色主题：' + core.getTheme(), C.PaleYellow)]);
+      term.push([seg('可用主题：' + Object.keys(core.THEMES).join(' / ') + '  —— 输入 color <名称> 切换。', C.Front)]);
+      return;
     }
+    var colorM = /^color\s+(\S+)$/.exec(command);
+    if (colorM) { applyTheme(colorM[1]); return; }
+
     if (command === 'echo') { term.push([seg('', C.Front)]); return; }
     if (command.indexOf('echo ') === 0) { term.push([seg(command.slice(5), C.Front)]); return; }
     if (command === 'date') { term.push([seg(new Date().toLocaleDateString('zh-CN'), C.Front)]); return; }
@@ -433,40 +511,13 @@
     }
     if (command === 'news off') { windows.newsStop(); term.push([seg('滚动新闻已关闭。', C.PaleGreen)]); return; }
 
-    // 音乐
-    if (command === 'music') {
-      var n = audio.trackCount();
-      if (n === 0) term.push([seg('当前没有可用的背景音乐文件（请在 assets/audio 文件夹下放入音频）。', C.PaleYellow)]);
-      else {
-        var names = audio.listTracks(), modeName = audio.MODE_NAMES[audio.getMode()], cur = audio.currentIndex();
-        term.push([seg('背景音乐列表（共 ' + n + ' 首，播放模式：' + modeName + '）：', C.PaleYellow)]);
-        names.forEach(function (name, i) {
-          term.push([seg('  ' + (i === cur ? '▶ ' : '  ') + (i + 1) + '. ' + name, i === cur ? C.PaleGreen : C.Front)]);
-        });
-        term.push([seg('用法：music.p=N 播放某编号 / music.mode=s-loop|l-loop|random 切换模式 / music on|off 开关 / vol +/- 调节音量', C.PaleYellow)]);
-      }
-      return;
+    // 音乐已移除：给出明确反馈，避免误判为拼写错误
+    if (/^(music|vol)(\s|\.|=|$)/.test(command)) {
+      term.push([seg('音乐功能已在本版本移除（不含背景音乐）。', C.Gray)]); return;
     }
-    if (command.indexOf('music.p=') === 0) {
-      var pn = core.parseNum(command.slice(8));
-      if (isNaN(pn)) { term.push([seg('用法：music.p=N（N 为音乐编号，可用 music 查看）', C.PaleYellow)]); return; }
-      if (pn < 1 || pn > audio.trackCount()) { term.push([seg('编号超出范围（共 ' + audio.trackCount() + ' 首，可用 music 查看）。', C.PaleYellow)]); return; }
-      audio.playTrack(pn);
-      term.push([seg('正在播放第 ' + pn + ' 首音乐：' + audio.listTracks()[pn - 1] + '。', C.PaleGreen)]); return;
+    if (command === 'c -music') {
+      term.push([seg('音乐相关命令已随背景音乐一并移除。', C.Gray)]); return;
     }
-    if (command.indexOf('music.mode=') === 0) {
-      var arg = command.slice(11).trim(), m = -1, disp = '';
-      if (arg === 's-loop') { m = 0; disp = '单曲循环'; }
-      else if (arg === 'l-loop') { m = 1; disp = '列表循环'; }
-      else if (arg === 'random') { m = 2; disp = '随机播放'; }
-      if (m >= 0) { audio.setMode(m); term.push([seg('音乐播放模式已设为：' + disp + '。', C.PaleGreen)]); }
-      else term.push([seg('用法：music.mode=s-loop|l-loop|random', C.PaleYellow)]);
-      return;
-    }
-    if (command === 'music on') { audio.resume(); term.push([seg('背景音乐已开启。', C.PaleGreen)]); return; }
-    if (command === 'music off') { audio.pause(); term.push([seg('背景音乐已关闭。', C.PaleGreen)]); return; }
-    if (command === 'vol +') { audio.volumeUp(); term.push([seg('背景音乐音量已调大。', C.PaleGreen)]); return; }
-    if (command === 'vol -') { audio.volumeDown(); term.push([seg('背景音乐音量已调小。', C.PaleGreen)]); return; }
 
     // dev 模式
     if (command === 'dev.start') {
@@ -527,6 +578,7 @@
       state.auxOn[id] = on; core.writeSlot(playerName, currentSlot, state);
       term.push([seg(G_DOT + ' ' + id + ' 已' + (on ? '开启' : '关闭') + '。', C.PaleGreen)]);
       if (id === 'Ax11' && !on) windows.splitStop();
+      if (state.cwd === '~\\game1-xri\\a\\a_resource' || state.cwd === '~\\game1-xri\\auxiliary') showView(state.cwd);
       return;
     }
     if (command === 'Ax_all on' || command === 'Ax_all off') {
@@ -548,6 +600,7 @@
       nn = Math.min(maxSplit, Math.floor(nn));
       state.splitCount = nn; core.writeSlot(playerName, currentSlot, state);
       if (nn <= 1) windows.splitStop();
+      else windows.splitStart(nn, splitContent);
       term.push([seg('分屏数量已设为 ' + nn + (nn <= 1 ? '（不分屏）' : '，分屏窗口已渲染。'), C.PaleGreen)]);
       return;
     }
@@ -555,13 +608,13 @@
     // 导航
     if (command === 'cd') { term.push([seg('当前路径：' + state.cwd, C.AquaSky)]); return; }
     if (command.indexOf('cd ') === 0) {
-      var arg = command.slice(3).trim(), np = core.normalizePath(state.cwd, arg);
-      if (!core.pathExists(np)) term.push([seg('路径不存在：' + arg, C.RedDusted)]);
+      var arg = command.slice(3).trim(), np = resolveCd(state.cwd, arg);
+      if (!np || !core.pathExists(np)) term.push([seg('路径不存在：' + arg, C.RedDusted)]);
       else { state.cwd = np; term.push([seg('已到达 ' + np, C.PaleGreen)]); showDirAuto(np); term.setPrompt(core.promptPrefix(state)); }
       return;
     }
     if (command === '~') { navigateTo('~'); return; }
-    if (command === 'show' || command === 'show()') { showDir(state.cwd); return; }
+    if (command === 'show' || command === 'show()') { showView(state.cwd); return; }
     if (command === 'tree') {
       term.push([seg('文件夹树（当前目录：' + state.cwd + '）', C.PaleYellow)]);
       term.push([seg(state.cwd, C.Front)]);
@@ -592,7 +645,7 @@
     }
     if (command === 'rishow_a' || command === 'rishow' || command === 'rishow_a()') {
       curvePanel();
-      term.pushLive(function () { return [seg('资源 a：', C.Front), seg(core.fmtNum(state.a.amount), C.BrightWhite), seg('   速度：+', C.Front), seg(core.fmtNum(state.a.rate) + '/s', C.Front)]; });
+      term.push([seg('资源 a：' + core.fmtNum(state.a.amount) + '   速度：+' + core.fmtNum(state.a.rate) + '/s', C.Front)]);
       return;
     }
     if (command === 'warn' || command === 'warn -min') {
@@ -609,8 +662,8 @@
     }
 
     // 购买项
-    var it = core.findBuyItem(command);
-    if (it && (it.path === state.cwd || state.auxOn.Ax14 || state.devMode)) { buy(it, 1); return; }
+    var item = core.findBuyItem(command);
+    if (item && (item.path === state.cwd || state.auxOn.Ax14 || state.devMode)) { buy(item, 1); return; }
 
     // Ax10 自定义命令执行
     if (state.auxOn.Ax10 && state.customCmds[command] !== undefined) {
@@ -625,20 +678,37 @@
   function echoCommand(cmd) {
     var p = core.promptPrefix(state);
     term.push([seg(p, 'Front')].concat(highlightCommand(cmd)));
-    // 分屏镜像
-    if (state.auxOn.Ax11 && state.splitCount > 1) refreshSplits();
-  }
-  function refreshSplits() {
-    windows.splitRefresh(function () {
-      var rows = term.getState ? [] : [];
-      // 简化：镜像当前状态摘要
-      return '<div style="color:#86b8ef">' + escapeHtml(state.cwd) + ' $ </div>' +
-        '<div>资源 a: ' + core.fmtNum(state.a.amount) + '</div>' +
-        '<div>速度: +' + core.fmtNum(state.a.rate) + '/s</div>';
-    });
   }
   function escapeHtml(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // ---------- 分屏内容（真实镜像主终端最近输出）----------
+  function splitContent() {
+    var lines = term.recentLines(12);
+    var html = '<div class="split-head">' + escapeHtml(core.promptPrefix(state)) + '</div>';
+    html += lines.map(function (l) { return '<div>' + escapeHtml(l) + '</div>'; }).join('');
+    html += '<div class="split-stat">a: ' + escapeHtml(core.fmtNum(state.a.amount)) +
+      '   +' + escapeHtml(core.fmtNum(state.a.rate)) + '/s   ' +
+      escapeHtml(new Date().toLocaleTimeString('zh-CN')) + '</div>';
+    return html;
+  }
+
+  // ---------- 底部状态栏（实时游戏信息）----------
+  var lastStatusText = '';
+  function renderStatusBar() {
+    var bar = document.getElementById('statusbar');
+    if (!bar) return;
+    var left = 'Console Incremental @ ' + VERSION + '  │  Player: ' + playerName + '  │  Slot: ' + currentSlot;
+    var right = state.cwd + '  │  a: ' + core.fmtNum(state.a.amount) +
+      '  │  +' + core.fmtNum(state.a.rate) + '/s  │  ' + new Date().toLocaleTimeString('zh-CN');
+    var txt = left + '@@' + right;
+    if (txt === lastStatusText) return;
+    lastStatusText = txt;
+    bar.innerHTML = '';
+    var l = document.createElement('span'); l.className = 'sb-left'; l.textContent = left;
+    var r = document.createElement('span'); r.className = 'sb-right'; r.textContent = right;
+    bar.appendChild(l); bar.appendChild(r);
   }
 
   // ---------- 补全（Ax4）----------
@@ -662,7 +732,7 @@
     if (!completion.open || !completion.items.length) { box.style.display = 'none'; return; }
     box.innerHTML = '';
     var inp = document.getElementById('cmd-input');
-    if (inp) {
+    if (inp && inp.getBoundingClientRect) {
       var r = inp.getBoundingClientRect();
       box.style.left = Math.min(r.left, window.innerWidth - 300) + 'px';
       box.style.top = Math.max(8, r.top - Math.min(completion.items.length, 12) * 24 - 8) + 'px';
@@ -670,9 +740,7 @@
     completion.items.forEach(function (item, i) {
       var d = document.createElement('div');
       d.className = 'completion-item' + (i === completion.index ? ' selected' : '');
-      // 红底判定：当前目录无法生效的命令
-      var invalid = !takesEffect(item);
-      if (invalid) d.classList.add('invalid');
+      if (!takesEffect(item)) d.classList.add('invalid');
       d.textContent = item;
       box.appendChild(d);
     });
@@ -730,15 +798,20 @@
       if (loop._acc > 0.5) { loop._acc = 0; resHistory.push(state.a.amount); if (resHistory.length > 200) resHistory.shift(); }
       // 自动保存（每 30s）
       if (now - lastAutoSave > 30000) { lastAutoSave = now; core.writeSlot(playerName, currentSlot, state); }
-      // Ax8 终端提醒 / Ax9 toast
+      // Ax8 终端提醒 / Ax9 浮层提醒
       if (now - lastToastCheck > 1000) {
         lastToastCheck = now;
         checkReminders();
       }
       // Ax11 分屏
       if (state.auxOn.Ax11 && state.splitCount > 1 && !windows.splitIsRunning()) {
-        windows.splitStart(state.splitCount, function () { return ''; });
+        windows.splitStart(state.splitCount, splitContent);
       }
+      if (now - lastSplitRefresh > 200) {
+        lastSplitRefresh = now;
+        if (state.auxOn.Ax11 && state.splitCount > 1) windows.splitRefresh();
+      }
+      if (now - lastStatusRefresh > 500) { lastStatusRefresh = now; renderStatusBar(); }
       term.render();
     }
     requestAnimationFrame(loop);
@@ -747,6 +820,16 @@
     var affordable = core.affordableItems(state);
     if (!affordable.length) return;
     var nowSec = Date.now() / 1000;
+    // Ax8 终端内提醒：可购买集合变化立即提醒，否则按间隔降频
+    if (state.auxOn.Ax8) {
+      var sig = affordable.map(function (x) { return x.id; }).join(',');
+      if (sig !== remindAx8Sig || nowSec - remindAx8At >= state.warnMin * 3) {
+        remindAx8Sig = sig; remindAx8At = nowSec;
+        term.push([seg(G_DOT + ' 购买提醒：' + affordable.map(function (x) {
+          return x.id + '（' + core.fmtNum(core.buyPriceBase(x, core.buyCount(state, x.id))) + ' a）';
+        }).join('、') + ' 现在可以购买。', C.PaleYellow)]);
+      }
+    }
     // Ax9 游戏外提醒：按 warnMin 与降频 step
     if (state.auxOn.Ax9 && !windows.toastIsVisible()) {
       var due = affordable.filter(function (it) {
@@ -755,12 +838,12 @@
         return (nowSec - last) >= state.warnMin * step;
       });
       if (due.length) {
-        var item = due[0];
-        var last = remindLast[item.id] || 0;
-        if (last && (nowSec - last) < state.warnMin) remindStep[item.id] = (remindStep[item.id] || 1) + 1;
-        else remindStep[item.id] = 1;
+        var picked = due[0];
+        var last = remindLast[picked.id] || 0;
+        if (last && (nowSec - last) < state.warnMin) remindStep[picked.id] = (remindStep[picked.id] || 1) + 1;
+        else remindStep[picked.id] = 1;
         due.forEach(function (x) { remindLast[x.id] = nowSec; });
-        windows.toastShow('可购买：' + item.id + ' — ' + item.content + item.effect(state), 6500);
+        windows.toastShow('可购买：' + picked.id + ' — ' + picked.content + picked.effect(state), 6500);
       }
     }
   }
@@ -845,21 +928,23 @@
       '</div>'
     );
     function choose(slot) {
+      // 必须解绑：否则进入命令行后按数字键仍会跳回槽位界面
+      document.removeEventListener('keydown', onKey);
       currentSlot = slot;
       var sd = core.readSlot(playerName, slot);
       state = core.createState();
       if (sd) { core.slotToState(sd, state); core.applyOfflineProgress(state, sd); }
       flowGame();
     }
-    Array.prototype.forEach.call(flowEl.querySelectorAll('.slot-row'), function (row) {
-      row.addEventListener('click', function () { choose(parseInt(row.getAttribute('data-slot'), 10)); });
-    });
     function onKey(e) {
       if (/^[1-9]$/.test(e.key)) {
         var s = parseInt(e.key, 10);
-        if (s >= 1 && s <= core.SLOT_COUNT) { document.removeEventListener('keydown', onKey); choose(s); }
+        if (s >= 1 && s <= core.SLOT_COUNT) choose(s);
       }
     }
+    Array.prototype.forEach.call(flowEl.querySelectorAll('.slot-row'), function (row) {
+      row.addEventListener('click', function () { choose(parseInt(row.getAttribute('data-slot'), 10)); });
+    });
     document.addEventListener('keydown', onKey);
   }
   function flowGame() {
@@ -891,24 +976,19 @@
     term.push([seg('Game1-xri', C.Front)]);
     term.push([seg('教程：' + (state.tutorialOn ? '开' : '关'), C.Front)]);
     term.push([seg('输入 help 并按下回车以查看命令列表。', C.PaleYellow)]);
+    if (state.tutorialOn && state.tutorialStage === 0) {
+      term.push([seg('教程：输入 res_a 查看资源 a，输入 buff_a 查看可购买项。', C.PaleGreen)]);
+    }
     term.blank();
     if (state.devMode) document.title = 'Console Incremental @ ' + VERSION + ' (dev mode)';
-    // 启动音乐与新闻
-    audio.onStatus(function (st) { updateStatusBar(st); });
-    audio.start();
     if (!windows.newsIsRunning()) windows.newsStart(windows.NEWS_ITEMS);
-    // Ax11 恢复分屏
-    if (state.auxOn.Ax11 && state.splitCount > 1) windows.splitStart(state.splitCount, function () { return ''; });
+    if (state.auxOn.Ax11 && state.splitCount > 1) windows.splitStart(state.splitCount, splitContent);
+    renderStatusBar();
     term.focus();
-  }
-  function updateStatusBar(st) {
-    var bar = document.getElementById('statusbar');
-    if (bar) bar.textContent = st.text;
   }
 
   // ---------- 启动 ----------
   function start() {
-    // 底部状态栏
     var app = document.getElementById('app');
     if (app && !document.getElementById('statusbar')) {
       var bar = document.createElement('div');
@@ -916,6 +996,9 @@
       app.appendChild(bar);
     }
     term.init('terminal');
+    var savedTheme = 'default';
+    try { savedTheme = localStorage.getItem(THEME_KEY) || 'default'; } catch (e) {}
+    applyTheme(savedTheme, true);
     term.onCommand(function (cmd) {
       echoCommand(cmd);
       try { executeCommand(cmd); }
@@ -928,6 +1011,7 @@
     term.onCompletion(handleCompletion);
     lastTick = performance.now();
     requestAnimationFrame(loop);
+    renderStatusBar();
     flowWelcome();
   }
 
@@ -938,6 +1022,8 @@
     getState: function () { return state; },
     execute: executeCommand,
     enterShell: enterShell,
-    setPlayer: function (n, slot) { playerName = n; currentSlot = slot || 1; }
+    setPlayer: function (n, slot) { playerName = n; currentSlot = slot || 1; },
+    setFlow: function (fn) { if (fn === 'name') flowName(); else if (fn === 'slot') flowSlot(); else if (fn === 'game') flowGame(); },
+    applyTheme: applyTheme
   };
 })(window);
