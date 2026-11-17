@@ -1,0 +1,45 @@
+# ===== CMake / C++ 构建产物（源项目遗留）=====
+cmake-build-*/
+build/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+Makefile
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.exp
+
+# ===== IDE / 编辑器 =====
+.idea/
+.vscode/
+*.user
+*.suo
+*.swp
+*.swo
+*~
+
+# ===== 游戏存档 / 日志（若随仓库携带）=====
+save/
+*.dat
+*.log
+
+# ===== Web 前端 =====
+node_modules/
+dist/
+.vite/
+.cache/
+
+# ===== 系统文件 =====
+.DS_Store
+Thumbs.db
+desktop.ini
