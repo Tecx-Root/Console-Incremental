@@ -11,12 +11,36 @@
   <div class="terminal-shell">
     <div class="term-header">
       <div class="term-dots"><i></i><i></i><i></i></div>
-      <div class="term-title">Console Incremental <span>· virtual terminal</span></div>
-      <div class="term-version">@ 0.0.1-alpha</div>
+      <div class="term-tab">
+        <span class="term-tab-icon">▸</span>
+        <span class="term-title">Console Incremental</span>
+        <span class="term-tab-sub">virtual terminal</span>
+      </div>
+      <div class="term-right">
+        <span class="term-live"><i></i> ONLINE</span>
+        <span class="term-version">@ 0.0.1-alpha</span>
+      </div>
     </div>
-    <div id="terminal"></div>
+    <div id="terminal">
+      <!-- 静态启动画面：即使脚本未执行也不会黑屏，term.init() 会接管并清空 -->
+      <div class="boot-screen" id="boot-screen">
+        <div class="boot-art">┌───────────────────────────────────────────┐
+│  C O N S O L E   I N C R E M E N T A L  │
+└───────────────────────────────────────────┘</div>
+        <div class="boot-title">CONSOLE INCREMENTAL</div>
+        <div class="boot-sub">@ 0.0.1-alpha  ·  a virtual console idle game</div>
+        <div class="boot-bar"><i></i></div>
+        <div class="boot-status">正在初始化终端…  <span>LOADING</span></div>
+        <div class="boot-note">若长时间停留，请刷新页面（Ctrl+R）或确认已启用 JavaScript</div>
+      </div>
+    </div>
   </div>
-  <div id="statusbar"></div>
+  <div id="statusbar">
+    <span class="sb-left">Console Incremental @ 0.0.1-alpha</span>
+    <span class="sb-right"><i></i> 等待连接</span>
+  </div>
+  <div id="fatal" hidden></div>
+  <noscript><div class="noscript-tip">需要启用 JavaScript 才能运行本游戏。</div></noscript>
 </div>
 <script src="js/core.js"></script>
 <script src="js/terminal.js"></script>

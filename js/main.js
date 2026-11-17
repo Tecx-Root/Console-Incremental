@@ -699,16 +699,30 @@
   function renderStatusBar() {
     var bar = document.getElementById('statusbar');
     if (!bar) return;
-    var left = 'Console Incremental @ ' + VERSION + '  │  Player: ' + playerName + '  │  Slot: ' + currentSlot;
-    var right = state.cwd + '  │  a: ' + core.fmtNum(state.a.amount) +
-      '  │  +' + core.fmtNum(state.a.rate) + '/s  │  ' + new Date().toLocaleTimeString('zh-CN');
-    var txt = left + '@@' + right;
+    var clock = new Date().toLocaleTimeString('zh-CN');
+    var txt = [playerName, currentSlot, state.cwd, Math.floor(state.a.amount), Math.floor(state.a.rate), clock].join('|');
     if (txt === lastStatusText) return;
     lastStatusText = txt;
     bar.innerHTML = '';
-    var l = document.createElement('span'); l.className = 'sb-left'; l.textContent = left;
-    var r = document.createElement('span'); r.className = 'sb-right'; r.textContent = right;
-    bar.appendChild(l); bar.appendChild(r);
+    function group(cls) {
+      var g = document.createElement('span'); g.className = 'sb-group ' + cls; bar.appendChild(g); return g;
+    }
+    function chip(parent, cls, text) {
+      var s = document.createElement('span'); s.className = 'sb-chip ' + (cls || '');
+      s.textContent = text; parent.appendChild(s); return s;
+    }
+    var g1 = group('sb-brand-group');
+    chip(g1, 'sb-brand', '◆ CONSOLE INCREMENTAL');
+    chip(g1, 'sb-dim', '@ ' + VERSION);
+    var g2 = group('sb-mid');
+    chip(g2, 'sb-label', 'PLAYER'); chip(g2, 'sb-strong', playerName || '—');
+    chip(g2, 'sb-label', 'SLOT'); chip(g2, 'sb-strong', String(currentSlot));
+    chip(g2, 'sb-label', 'a'); chip(g2, 'sb-strong', core.fmtNum(state.a.amount));
+    chip(g2, 'sb-rate', '+' + core.fmtNum(state.a.rate) + '/s');
+    chip(g2, 'sb-path', state.cwd);
+    var g3 = group('sb-end');
+    chip(g3, 'sb-live', 'ONLINE');
+    chip(g3, 'sb-clock', clock);
   }
 
   // ---------- 补全（Ax4）----------
@@ -786,6 +800,10 @@
   // ---------- 游戏循环 ----------
   function loop(now) {
     if (!lastTick) lastTick = now;
+    // 欢迎页看门狗：即使定时器被后台标签页节流，只要页面在前台渲染一帧就强制推进
+    if (!inShell && !welcomeDone && bootStartedAt && Date.now() - bootStartedAt > 2600 && typeof flowBackdropAction === 'function') {
+      flowBackdropAction();
+    }
     var dt = Math.min(0.25, (now - lastTick) / 1000);
     lastTick = now;
     if (inShell) {
@@ -848,122 +866,240 @@
     }
   }
 
+  // ---------- 启动异常可见化：任何脚本错误都不再表现为黑屏 ----------
+  function showFatal(msg) {
+    var box = document.getElementById('fatal');
+    if (!box) return;
+    box.hidden = false;
+    box.style.display = 'flex';
+    box.innerHTML = '';
+    var card = document.createElement('div'); card.className = 'fatal-card';
+    var h = document.createElement('div'); h.className = 'fatal-title'; h.textContent = '启动异常';
+    var p = document.createElement('div'); p.className = 'fatal-detail'; p.textContent = String(msg);
+    var tip = document.createElement('div'); tip.className = 'fatal-tip';
+    tip.textContent = '可尝试重新加载；若仍失败，请检查浏览器控制台。';
+    var btn = document.createElement('button'); btn.className = 'flow-btn primary'; btn.textContent = '重新加载';
+    btn.addEventListener('click', function () { if (global.location && global.location.reload) global.location.reload(); });
+    card.appendChild(h); card.appendChild(p); card.appendChild(tip); card.appendChild(btn);
+    box.appendChild(card);
+  }
+  try {
+    global.addEventListener('error', function (e) {
+      showFatal((e && e.message ? e.message : '未知脚本错误') +
+        (e && e.filename ? '（' + e.filename + ':' + e.lineno + '）' : ''));
+    });
+    global.addEventListener('unhandledrejection', function (e) {
+      showFatal('异步操作失败：' + (e && e.reason && e.reason.message ? e.reason.message : String(e && e.reason)));
+    });
+  } catch (e) {}
+
   // ---------- 流程界面：欢迎 / 名称 / 槽位 / 游戏 ----------
   var flowEl = null;
+  var flowKeyHandler = null, flowBackdropAction = null;
+  var bootTimer = null, bootWatchdog = null, welcomeDone = false, bootStartedAt = 0;
+
   function ensureFlow() {
     if (!flowEl) {
       flowEl = document.createElement('div');
       flowEl.className = 'flow-overlay';
+      // 点击遮罩空白处也能推进，避免只能靠键盘 / 定时器
+      flowEl.addEventListener('click', function (e) {
+        if (e.target === flowEl && typeof flowBackdropAction === 'function') flowBackdropAction();
+      });
       document.getElementById('app').appendChild(flowEl);
     }
     return flowEl;
   }
-  function hideFlow() { if (flowEl) { flowEl.innerHTML = ''; flowEl.style.display = 'none'; } }
+  function bindFlowKeys(fn) { unbindFlowKeys(); flowKeyHandler = fn; document.addEventListener('keydown', flowKeyHandler); }
+  function unbindFlowKeys() {
+    if (flowKeyHandler) { document.removeEventListener('keydown', flowKeyHandler); flowKeyHandler = null; }
+  }
+  function hideFlow() {
+    unbindFlowKeys();
+    flowBackdropAction = null;
+    if (bootTimer) { clearTimeout(bootTimer); bootTimer = null; }
+    if (bootWatchdog) { clearTimeout(bootWatchdog); bootWatchdog = null; }
+    if (flowEl) { flowEl.innerHTML = ''; flowEl.style.display = 'none'; }
+  }
   function showFlow(html) {
     var f = ensureFlow();
     f.innerHTML = html; f.style.display = 'flex';
   }
+  function stepBar(active) {
+    var names = ['玩家名称', '存档槽位', '进入游戏'];
+    return '<div class="step-bar">' + names.map(function (n, i) {
+      var k = i + 1, cls = k === active ? 'active' : (k < active ? 'done' : '');
+      return '<div class="step ' + cls + '"><span class="step-num">' + (k < active ? '◆' : k) + '</span><span class="step-name">' + n + '</span></div>';
+    }).join('<span class="step-link"></span>') + '</div>';
+  }
   function flowWelcome() {
-    showFlow('<div class="welcome-text" id="welcomeText">◆ Welcome to Console Incremental ◆</div>' +
-      '<div class="flow-hint">按回车继续</div>');
-    var done = false;
+    welcomeDone = false;
+    bootStartedAt = Date.now();
+    showFlow(
+      '<div class="boot-panel">' +
+        '<div class="boot-mark">◆</div>' +
+        '<div class="welcome-text">WELCOME TO CONSOLE INCREMENTAL</div>' +
+        '<div class="boot-sub">@ ' + VERSION + '  ·  a virtual console idle game</div>' +
+        '<div class="boot-check">' +
+          '<div><span class="ck">[ OK ]</span> 终端渲染器已就绪</div>' +
+          '<div><span class="ck">[ OK ]</span> 资源系统已装载</div>' +
+          '<div><span class="ck">[ OK ]</span> 存档管理器已连接</div>' +
+        '</div>' +
+        '<div class="boot-actions"><button class="flow-btn primary" id="bootEnter">进入游戏 <span>▸</span></button></div>' +
+        '<div class="flow-hint">按任意键或点击继续 · 稍后自动进入</div>' +
+      '</div>'
+    );
+    // 文字保持可见（不淡出到透明），四重推进入口：按钮 / 任意键 / 点击遮罩 / 定时器
     function finish() {
-      if (done) return; done = true;
-      document.removeEventListener('keydown', onKey);
+      if (welcomeDone) return;
+      welcomeDone = true;
+      if (bootTimer) { clearTimeout(bootTimer); bootTimer = null; }
+      if (bootWatchdog) { clearTimeout(bootWatchdog); bootWatchdog = null; }
+      unbindFlowKeys();
+      flowBackdropAction = null;
       flowName();
     }
-    function onKey(e) { if (e.key === 'Enter') finish(); }
-    document.addEventListener('keydown', onKey);
-    setTimeout(finish, 2000);
+    flowBackdropAction = finish;
+    var btn = document.getElementById('bootEnter');
+    if (btn) btn.addEventListener('click', finish);
+    bindFlowKeys(function (e) {
+      if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta') return;
+      finish();
+    });
+    bootTimer = setTimeout(finish, 1600);
+    bootWatchdog = setTimeout(finish, 4000);
   }
   function flowName() {
-    var saves = core.listSaves();
-    var suggestHtml = saves.length ? '<div class="flow-suggest">已有存档：' + saves.map(function (s) {
+    var saves = [];
+    try { saves = core.listSaves() || []; } catch (e) { saves = []; }
+    var suggestHtml = saves.length ? '<div class="flow-suggest">检测到已有存档，点击填入：' + saves.map(function (s) {
       return '<span class="save-chip" data-name="' + escapeHtml(s) + '">' + escapeHtml(s) + '</span>';
     }).join('') + '</div>' : '';
     showFlow(
-      '<div class="flow-card">' +
-      '<div class="flow-title">◆  CONSOLE INCREMENTAL @ ' + VERSION + '  ◆</div>' +
-      '<div class="flow-sub">a virtual console idle game</div>' +
+      '<div class="flow-card">' + stepBar(1) +
+      '<div class="flow-kicker">SESSION / 01</div>' +
+      '<div class="flow-title">CONSOLE INCREMENTAL</div>' +
+      '<div class="flow-sub">@ ' + VERSION + '  ·  a virtual console idle game</div>' +
       '<div class="flow-divider"></div>' +
-      '<div class="flow-prompt">请输入你的玩家名称：</div>' +
-      '<input id="nameInput" class="flow-input" autocomplete="off" autofocus />' +
+      '<div class="flow-prompt">请输入你的玩家名称</div>' +
+      '<div class="input-row">' +
+        '<input id="nameInput" class="flow-input" autocomplete="off" placeholder="Player name" />' +
+        '<button class="flow-btn primary" id="nameContinue">继续 <span>▸</span></button>' +
+      '</div>' +
       suggestHtml +
-      '<div class="flow-hint">按回车继续</div>' +
+      '<div class="flow-hint">按回车或点击「继续」</div>' +
       '</div>'
     );
     var inp = document.getElementById('nameInput');
+    function submit() {
+      var name = inp ? inp.value.trim() : '';
+      if (!name) {
+        if (inp) {
+          inp.classList.add('shake');
+          setTimeout(function () { inp.classList.remove('shake'); }, 420);
+          inp.focus();
+        }
+        return;
+      }
+      playerName = name;
+      try { if (!core.saveExists(name)) core.createSave(name); } catch (e) {}
+      unbindFlowKeys();
+      flowBackdropAction = null;
+      flowSlot();
+    }
+    flowBackdropAction = null;
     if (inp) {
       inp.focus();
-      inp.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') {
-          var name = inp.value.trim();
-          if (!name) return;
-          playerName = name;
-          if (!core.saveExists(name)) core.createSave(name);
-          flowSlot();
-        }
-      });
+      inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
     }
+    var cont = document.getElementById('nameContinue');
+    if (cont) cont.addEventListener('click', submit);
     Array.prototype.forEach.call(flowEl.querySelectorAll('.save-chip'), function (chip) {
-      chip.addEventListener('click', function () { if (inp) { inp.value = chip.getAttribute('data-name'); inp.focus(); } });
+      chip.addEventListener('click', function () {
+        if (inp) { inp.value = chip.getAttribute('data-name'); inp.focus(); }
+      });
     });
   }
   function flowSlot() {
     var rows = '';
     for (var i = 1; i <= core.SLOT_COUNT; i++) {
-      var sd = core.readSlot(playerName, i);
+      var sd = null, summary = '';
+      try { sd = core.readSlot(playerName, i); if (sd) summary = core.slotSummary(playerName, i); } catch (e) { sd = null; }
       rows += '<div class="slot-row" data-slot="' + i + '">' +
-        '<span class="slot-id">槽位' + i + '</span>' +
-        '<span class="slot-info">' + (sd ? escapeHtml(core.slotSummary(playerName, i)) : '（空槽位，从零开始）') + '</span>' +
+        '<span class="slot-id"><i>' + i + '</i></span>' +
+        '<span class="slot-info"><b>槽位 ' + i + '</b><em>' + (sd ? escapeHtml(summary) : '（空槽位，从零开始）') + '</em></span>' +
+        '<span class="slot-arrow">▸</span>' +
         '</div>';
     }
     showFlow(
-      '<div class="flow-card wide">' +
-      '<div class="flow-title">◆ 选择存档槽位  ◆</div>' +
-      '<div class="flow-sub">玩家：' + escapeHtml(playerName) + '</div>' +
+      '<div class="flow-card wide">' + stepBar(2) +
+      '<div class="flow-kicker">SESSION / 02</div>' +
+      '<div class="flow-title">选择存档槽位</div>' +
+      '<div class="flow-sub">玩家：<span class="hl">' + escapeHtml(playerName) + '</span>  ·  每个存档含 ' + core.SLOT_COUNT + ' 个独立槽位</div>' +
       '<div class="flow-divider"></div>' +
       rows +
+      '<div class="flow-actions">' +
+        '<button class="flow-btn ghost" id="slotBack">← 返回</button>' +
+        '<button class="flow-btn primary" id="slotContinue">使用槽位 ' + currentSlot + ' <span>▸</span></button>' +
+      '</div>' +
       '<div class="flow-hint">点击槽位或直接按数字键 1–' + core.SLOT_COUNT + '</div>' +
       '</div>'
     );
     function choose(slot) {
-      // 必须解绑：否则进入命令行后按数字键仍会跳回槽位界面
-      document.removeEventListener('keydown', onKey);
+      unbindFlowKeys();
+      flowBackdropAction = null;
       currentSlot = slot;
-      var sd = core.readSlot(playerName, slot);
+      var sd = null;
+      try { sd = core.readSlot(playerName, slot); } catch (e) { sd = null; }
       state = core.createState();
-      if (sd) { core.slotToState(sd, state); core.applyOfflineProgress(state, sd); }
+      if (sd) {
+        try { core.slotToState(sd, state); core.applyOfflineProgress(state, sd); } catch (e) {}
+      }
       flowGame();
     }
     function onKey(e) {
       if (/^[1-9]$/.test(e.key)) {
         var s = parseInt(e.key, 10);
         if (s >= 1 && s <= core.SLOT_COUNT) choose(s);
-      }
+      } else if (e.key === 'Enter') choose(currentSlot);
     }
+    bindFlowKeys(onKey);
     Array.prototype.forEach.call(flowEl.querySelectorAll('.slot-row'), function (row) {
       row.addEventListener('click', function () { choose(parseInt(row.getAttribute('data-slot'), 10)); });
     });
-    document.addEventListener('keydown', onKey);
+    var back = document.getElementById('slotBack');
+    if (back) back.addEventListener('click', function () { unbindFlowKeys(); flowName(); });
+    var cont = document.getElementById('slotContinue');
+    if (cont) cont.addEventListener('click', function () { choose(currentSlot); });
   }
   function flowGame() {
     showFlow(
-      '<div class="flow-card">' +
-      '<div class="flow-title">◆ 选择小游戏  ◆</div>' +
+      '<div class="flow-card">' + stepBar(3) +
+      '<div class="flow-kicker">SESSION / 03</div>' +
+      '<div class="flow-title">选择小游戏</div>' +
+      '<div class="flow-sub">已就绪：玩家 ' + escapeHtml(playerName) + '  ·  槽位 ' + currentSlot + '</div>' +
       '<div class="flow-divider"></div>' +
-      '<div class="game-row" id="gameRow">▸ Game1-xri</div>' +
-      '<div class="flow-hint">按回车进入游戏</div>' +
+      '<div class="game-row" id="gameRow">' +
+        '<span class="game-icon">▸</span>' +
+        '<span class="game-meta"><b>Game1-xri</b><em>资源 a · 购买项 · 路径探索</em></span>' +
+        '<span class="game-tag">AVAILABLE</span>' +
+      '</div>' +
+      '<div class="flow-actions"><button class="flow-btn primary" id="gameEnter">进入终端 <span>▸</span></button></div>' +
+      '<div class="flow-hint">按回车或点击「进入终端」</div>' +
       '</div>'
     );
     function enter() {
-      document.removeEventListener('keydown', onKey);
+      unbindFlowKeys();
+      flowBackdropAction = null;
       enterShell();
     }
     function onKey(e) { if (e.key === 'Enter') enter(); }
-    document.addEventListener('keydown', onKey);
+    bindFlowKeys(onKey);
+    flowBackdropAction = enter;
     var gr = document.getElementById('gameRow');
     if (gr) gr.addEventListener('click', enter);
+    var ge = document.getElementById('gameEnter');
+    if (ge) ge.addEventListener('click', enter);
   }
   function enterShell() {
     hideFlow();
@@ -989,30 +1125,35 @@
 
   // ---------- 启动 ----------
   function start() {
-    var app = document.getElementById('app');
-    if (app && !document.getElementById('statusbar')) {
-      var bar = document.createElement('div');
-      bar.id = 'statusbar';
-      app.appendChild(bar);
-    }
-    term.init('terminal');
-    var savedTheme = 'default';
-    try { savedTheme = localStorage.getItem(THEME_KEY) || 'default'; } catch (e) {}
-    applyTheme(savedTheme, true);
-    term.onCommand(function (cmd) {
-      echoCommand(cmd);
-      try { executeCommand(cmd); }
-      catch (err) {
-        term.push([seg('（命令执行出错：' + (err && err.message ? err.message : String(err)) + '）', C.RedDusted)]);
-        if (global.console && console.error) console.error(err);
+    try {
+      var app = document.getElementById('app');
+      if (app && !document.getElementById('statusbar')) {
+        var bar = document.createElement('div');
+        bar.id = 'statusbar';
+        app.appendChild(bar);
       }
-      term.focus();
-    });
-    term.onCompletion(handleCompletion);
-    lastTick = performance.now();
-    requestAnimationFrame(loop);
-    renderStatusBar();
-    flowWelcome();
+      term.init('terminal');
+      var savedTheme = 'default';
+      try { savedTheme = localStorage.getItem(THEME_KEY) || 'default'; } catch (e) {}
+      applyTheme(savedTheme, true);
+      term.onCommand(function (cmd) {
+        echoCommand(cmd);
+        try { executeCommand(cmd); }
+        catch (err) {
+          term.push([seg('（命令执行出错：' + (err && err.message ? err.message : String(err)) + '）', C.RedDusted)]);
+          if (global.console && console.error) console.error(err);
+        }
+        term.focus();
+      });
+      term.onCompletion(handleCompletion);
+      lastTick = performance.now();
+      requestAnimationFrame(loop);
+      renderStatusBar();
+      flowWelcome();
+    } catch (err) {
+      showFatal((err && err.message ? err.message : String(err)));
+      if (global.console && console.error) console.error(err);
+    }
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
