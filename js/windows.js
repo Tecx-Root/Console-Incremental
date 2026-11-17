@@ -5,15 +5,24 @@
 (function (global) {
   'use strict';
 
-  // 新闻之间的间隔：前后各留 10 个空格，配一个菱形分隔，避免条目挤在一起
-  var NEWS_SEPARATOR = '          ◆          ';
+  // 新闻逐条播放：同一时刻屏幕上只有一条，等它完全移出左边界后，
+  // 下一条才从右边界开始进入（间隔等于整个可视区宽度）。
+  // 条目之间不加任何分隔符 / 圆点：每条新闻前都保持纯文本。
+  var NEWS_SPEED = 2.4;          // px / 帧（30ms 一帧）
+  // 去掉条目首尾的项目符号与空白（◆ ● · ▸ • 等），保证新闻前不出现"点"
+  function cleanNewsItem(s) {
+    return String(s)
+      .replace(/^[\s◆◇●○·•‣▪▸▹►>]+/, '')
+      .replace(/[\s◆◇●○·•‣▪▸▹►<]+$/, '');
+  }
+  var newsIndex = 0;
   var newsItems = [
     '据本台记者报道，近日，一名外国小哥竟然惊奇地发现————————————杯子是用来喝水的',
     '1+1=?',
     '1+1=（系统未响应）',
     '1+1=（服务器繁忙请稍后再试）',
     '猜猜这是新闻列表里的第几条新闻'
-  ];
+  ].map(cleanNewsItem);
 
   var newsWin = null, newsTimer = null, newsRunning = false;
   var splitWins = [], splitRunning = false, splitRenderFn = null;
@@ -57,7 +66,8 @@
 
   // ---------- 滚动新闻窗口 ----------
   function newsStart(items) {
-    if (items && items.length) newsItems = items;
+    if (items && items.length) newsItems = items.map(cleanNewsItem).filter(Boolean);
+    if (!newsItems.length) return;
     if (newsRunning) return;
     newsRunning = true;
     newsWin = document.createElement('div');
@@ -72,17 +82,31 @@
     track.className = 'news-track';
     var text = document.createElement('span');
     text.className = 'news-text';
-    text.textContent = newsItems.join(NEWS_SEPARATOR) + NEWS_SEPARATOR;
     track.appendChild(text);
-    track.appendChild(text.cloneNode(true));
     body.appendChild(track);
     newsWin.appendChild(body);
     document.body.appendChild(newsWin);
+
     var pos = 0;
+    // 视口宽度：优先取内容区实际宽度，DOM 桩/未布局时回退到窗口宽度
+    function viewportWidth() {
+      return body.clientWidth || newsWin.clientWidth || 440;
+    }
+    // 只在一条新闻完全移出左边界后才调用：把下一条放到右边界之外
+    function loadNext() {
+      newsIndex = (newsIndex + 1) % newsItems.length;
+      text.textContent = newsItems[newsIndex];
+      pos = viewportWidth();
+      track.style.transform = 'translateX(' + pos + 'px)';
+    }
+    text.textContent = newsItems[newsIndex % newsItems.length];
+    pos = viewportWidth();
+    track.style.transform = 'translateX(' + pos + 'px)';
     newsTimer = setInterval(function () {
-      pos -= 1.5;
-      var half = text.offsetWidth;
-      if (half > 0 && -pos >= half) pos += half;
+      pos -= NEWS_SPEED;
+      var w = text.offsetWidth || 0;
+      // w <= 0 时（字体未加载 / 未布局）只移动，不切换，避免误判为已移出
+      if (w > 0 && pos <= -w) { loadNext(); return; }
       track.style.transform = 'translateX(' + pos + 'px)';
     }, 30);
   }

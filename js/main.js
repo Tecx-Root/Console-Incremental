@@ -34,13 +34,17 @@
   var GLOBAL_CMDS = [
     'help', 'tutorial on', 'tutorial off', 'version', 'save.info', 'slot.info', 'game.info',
     'color', 'color default', 'color ocean', 'color amber', 'color mono',
-    'news on', 'news off', 'cls', 'clear', 'exit', 'olpg on', 'olpg off',
-    'save', 'save.hardreset', 'slot.hardreset', 'export save -p ', 'import save -p ',
+    'news on', 'news off', 'cls', 'clear', 'exit', 'olpg', 'olpg on', 'olpg off',
+    'save', 'save.hardreset', 'rm save', 'slot.hardreset', 'rm slot',
+    'export save -p ', 'import save -p ',
     'export slot -p ', 'import slot -p ', 'tree', 'cd ', '~', 'show', 'info', 'atb',
     'res_a', 'buff_a', 'upg_a', 'rst_a', 'ach', 'aux', 'Ax_all on', 'Ax_all off',
     'rishow_a', 'warn', 'warn -min', 'warn -min=', 'dev.start',
     'echo ', 'date', 'time', 'collapse ',
-    'cmd', 'cmd.add ', 'cmd.del ', 'cmd.rm ', 'cmd.list', 'scr.num=',
+    'cmd', 'cmd list', 'cmd.add ', 'cmd.del ', 'cmd.rm ', 'cmd.list', 'scr.num=',
+    'c -basic', 'c -save', 'c -action', 'c -music', 'c -others', 'c -dev',
+    'insert ', 'copy', 'cut', 'paste', 'del', 'mov up', 'mov down', 'sel ', 'unsel',
+    'collapse ', 'rishow', 'rishow_a',
     'Ax1 on', 'Ax1 off', 'Ax2 on', 'Ax2 off', 'Ax3 on', 'Ax3 off', 'Ax4 on', 'Ax4 off',
     'Ax5 on', 'Ax5 off', 'Ax6 on', 'Ax6 off', 'Ax7 on', 'Ax7 off', 'Ax8 on', 'Ax8 off',
     'Ax9 on', 'Ax9 off', 'Ax10 on', 'Ax10 off', 'Ax11 on', 'Ax11 off', 'Ax12 on', 'Ax12 off',
@@ -51,6 +55,21 @@
     GLOBAL_CMDS.push(id + ' on'); GLOBAL_CMDS.push(id + ' off');
   });
   GLOBAL_CMDS = GLOBAL_CMDS.filter(function (v, i, a) { return a.indexOf(v) === i; }).sort();
+
+  // 对齐 C++ isReservedCmdName()：自定义命令不得遮蔽内建命令或购买项 id
+  var RESERVED_CMDS = [
+    'help', 'version', 'tutorial', 'save', 'save.info', 'slot.info', 'game.info',
+    'color', 'cls', 'clear', 'exit', 'news', 'cd', 'show', 'show()', 'tree',
+    'info', 'atb', 'res_a', 'buff_a', 'upg_a', 'rst_a', 'ach', 'aux',
+    'music', 'olpg', 'echo', 'date', 'time', 'warn', 'c', 'Ax_all', 'scr',
+    'rishow_a', 'slot', 'export', 'import', 'rm', 'cmd',
+    'Ax1', 'Ax2', 'Ax3', 'Ax4', 'Ax5', 'Ax6', 'Ax7', 'Ax8', 'Ax9', 'Ax10',
+    'Ax11', 'Ax12', 'Ax13', 'Ax14', 'Ax15', 'Ax16'
+  ];
+  function reservedCmd(name) {
+    if (RESERVED_CMDS.indexOf(name) >= 0) return true;
+    return !!core.findBuyItem(name);
+  }
 
   // ---------- 主题 ----------
   var CSS_VAR_MAP = {
@@ -79,11 +98,27 @@
       if (!quiet) term.push([seg('未知主题：' + name + '（可用：' + Object.keys(core.THEMES).join(' / ') + '）', C.RedDusted)]);
       return false;
     }
+    // color <0-F> 设置的前景色索引优先于主题默认前景色
+    if (state.defaultFg !== 7) core.PALETTE.FRONT = core.FG16[state.defaultFg];
     syncCssTheme();
     term.repaint();
     try { localStorage.setItem(THEME_KEY, name); } catch (e) {}
     if (!quiet) term.push([seg(G_DOT + ' 配色主题已设为 ' + name + '。', C.PaleGreen)]);
     return true;
+  }
+  // 与 C++ currentDateStr() / currentClock() 同格式（date / time 命令实时刷新）
+  function currentClock() {
+    var d = new Date(), p = function (n) { return String(n).padStart(2, '0'); };
+    return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+  function currentDateStr() {
+    var d = new Date(), p = function (n) { return String(n).padStart(2, '0'); };
+    var wd = ['日', '一', '二', '三', '四', '五', '六'];
+    return d.getFullYear() + '年' + p(d.getMonth() + 1) + '月' + p(d.getDate()) + '日 星期' + wd[d.getDay()];
+  }
+  function unknownCommand(command) {
+    term.push([seg("'" + command + "' is not a recognized command.", C.RedDusted)]);
+    term.push([seg("Type 'help' for available commands.", C.Gray)]);
   }
 
   // ---------- 目录内容渲染 ----------
@@ -131,22 +166,22 @@
         var sd = core.readSlot(playerName, i);
         term.push([seg('  槽位' + i + ': ' + ((sd && sd.lastSaved) || '(空)'), C.Front)]);
       });
-      term.push([seg('  配色主题：' + core.getTheme(), C.Front)]);
     } else if (path === '~\\game1-xri\\a\\a_resource') {
-      term.push([seg('── 资源 a ──', C.PaleYellow)]);
-      term.pushLive(function () {
-        return [seg('  资源 a   : ', C.Front), seg(core.fmtNum(state.a.amount), C.BrightWhite)];
-      }, 'view');
-      term.pushLive(function () {
-        return [seg('  速度     : +', C.Front), seg(core.fmtNum(state.a.rate) + '/s', C.Front)];
-      }, 'view');
-      term.pushLive(function () {
-        return [seg('  历史峰值 : ', C.Front), seg(core.fmtNum(state.maxAmountA), C.PaleYellow)];
-      }, 'view');
+      // 对齐 C++ showLeaf：Ax6 关闭时是 RESOURCE STATUS 盒；开启时叠加曲线与峰值
+      var resRow = function () {
+        return [seg('资源 a   : ', C.Front), seg(core.fmtNum(state.a.amount), C.BrightWhite)];
+      };
+      var rateRow = function () {
+        return [seg('速度     : +', C.Front), seg(core.fmtNum(state.a.rate) + '/s', C.BrightWhite)];
+      };
       if (state.auxOn.Ax6) {
-        term.pushLive(function () {
-          return [seg('  增长曲线 : ', C.Front), seg(sparkline(resHistory, 46), C.AquaSky)];
-        }, 'view');
+        term.box(' RESOURCE a ', [
+          resRow, rateRow,
+          function () { return [seg('历史峰值 : ', C.Front), seg(core.fmtNum(state.maxAmountA), C.PaleYellow)]; },
+          function () { return [seg(sparkline(resHistory, 46), C.AquaSky)]; }
+        ], { color: C.LightBlue, width: 60 });
+      } else {
+        term.box(' RESOURCE STATUS ', [resRow, rateRow], { color: C.PaleGreen, width: 88 });
       }
     } else if (path === '~\\game1-xri\\a\\a_buff' || path === '~\\game1-xri\\a\\a_upgrade') {
       term.push([seg(path.indexOf('a_buff') >= 0 ? 'a 类可重复购买的购买项：' : 'a 类升级信息：', C.PaleYellow)]);
@@ -258,53 +293,157 @@
     return hit;
   }
 
+  // ---------- Ax7：更好的文件夹树（Func15）可点击、可折叠面板 ----------
+  function pathLeaf(path) {
+    var parts = core.splitPath(path);
+    return parts[parts.length - 1] || path;
+  }
+  function emitTreeAx7() {
+    var panel = document.createElement('div');
+    panel.className = 'tree-panel';
+    renderTreePanel(panel);
+    term.pushNode(panel);
+  }
+  function renderTreePanel(panel) {
+    panel.innerHTML = '';
+    var head = document.createElement('div');
+    head.className = 'tree-panel-head';
+    head.textContent = '文件夹树  ·  当前目录 ' + state.cwd;
+    panel.appendChild(head);
+    var body = document.createElement('div');
+    body.className = 'tree-panel-body';
+    panel.appendChild(body);
+
+    function addDir(path, depth) {
+      var children = core.getChildren(path);
+      var row = document.createElement('div');
+      row.className = 'tree-node';
+      row.style.paddingLeft = (8 + depth * 18) + 'px';
+      var toggle = document.createElement('span');
+      toggle.className = 'tree-toggle' + (children.length ? '' : ' leaf');
+      toggle.textContent = children.length ? (treeCollapsed[path] ? '[+]' : '[-]') : '·';
+      if (children.length) {
+        toggle.addEventListener('click', function (e) {
+          e.stopPropagation();
+          treeCollapsed[path] = !treeCollapsed[path];
+          renderTreePanel(panel);
+        });
+      }
+      row.appendChild(toggle);
+      var name = document.createElement('span');
+      name.className = 'tree-name' + (path === state.cwd ? ' current' : '');
+      name.textContent = pathLeaf(path);
+      name.title = '点击跳转到 ' + path;
+      name.addEventListener('click', function () { navigateTo(path); });
+      row.appendChild(name);
+      var p = core.stripGame1Xri(path);
+      var aliases = { '~\\information': 'info', '~\\automation\\autobuyer': 'atb',
+        '~\\a\\a_resource': 'res_a', '~\\a\\a_buff': 'buff_a', '~\\a\\a_upgrade': 'upg_a',
+        '~\\a\\a_reset': 'rst_a', '~\\achievement': 'ach', '~\\auxiliary': 'aux' };
+      if (aliases[p]) {
+        var tag = document.createElement('span');
+        tag.className = 'tree-alias'; tag.textContent = aliases[p];
+        row.appendChild(tag);
+      }
+      body.appendChild(row);
+      if (treeCollapsed[path]) return;
+      children.forEach(function (c) { addDir(path + '\\' + c, depth + 1); });
+      core.BUY_ITEMS.filter(function (it) { return it.path === path || it.path === p; })
+        .forEach(function (it) {
+          var ir = document.createElement('div');
+          ir.className = 'tree-node tree-item';
+          ir.style.paddingLeft = (8 + (depth + 1) * 18) + 'px';
+          ir.textContent = '└ ' + it.id + '：' + it.content + it.effect(state);
+          body.appendChild(ir);
+        });
+      if (state.auxOn.Ax16 && isLeafDir(path)) {
+        var cl = folderContentLabel(path);
+        if (cl) {
+          var cr = document.createElement('div');
+          cr.className = 'tree-node tree-label';
+          cr.style.paddingLeft = (8 + (depth + 1) * 18) + 'px';
+          cr.textContent = '└ ' + cl;
+          body.appendChild(cr);
+        }
+      }
+    }
+    addDir(state.cwd, 0);
+    var foot = document.createElement('div');
+    foot.className = 'tree-panel-foot';
+    foot.textContent = '点击【名称】跳转目录 · 点击 [+]/[-] 折叠/展开';
+    panel.appendChild(foot);
+  }
+
   // ---------- 帮助 ----------
+  // 文案逐条对齐 C++ executeCommand() 中 pushBox 的内容（策划案「命令一览」）
   var HELP_CATS = {
     'c -basic': { title: ' 基本命令 ', w: 60, lines: [
-      'help            查看所有命令及功能', 'tutorial on/off 教程开关', 'version         查看游戏版本',
-      'save.info       查看当前存档信息', 'slot.info       查看当前存档槽位信息',
-      'game.info       查看当前的小游戏信息', 'color [名称]    查看/切换配色主题', 'news on/off     新闻开/关',
-      'cls/clear       清屏', 'exit/ESC        退出游戏'
+      'help            查看所有命令及功能',
+      'tutorial on/off 教程开关',
+      'version         查看游戏版本',
+      'save.info       查看当前存档信息',
+      'slot.info       查看当前存档槽位信息',
+      'game.info       查看当前的小游戏信息',
+      'color           改变颜色',
+      'news on/off     新闻开/关',
+      'cls/clear       清屏',
+      'exit/ESC        退出游戏'
+    ] },
+    'c -music': { title: ' 音乐相关 ', w: 60, lines: [
+      'music 查看音乐列表',
+      'music.p=N 播放某编号音乐',
+      'music.mode=s-loop/l-loop/random 设置音乐播放模式为单曲循环/列表循环/随机播放',
+      'music on/off 音乐开/关',
+      'vol +/- 放大/降低背景音乐音量',
+      '（本版本已整体移除背景音乐，上述命令不可用）'
     ] },
     'c -save': { title: ' 存档相关 ', w: 64, lines: [
-      'save 手动保存', 'save.hardreset 清除当前存档数据并自动返回输入用户名的界面（硬重置当前存档）',
+      'save 手动保存',
+      'save.hardreset 清除当前存档数据并自动返回输入用户名的界面（硬重置当前存档）',
       'slot.hardreset 清除当前存档槽位数据并自动返回选择存档槽位的界面（硬重置当前存档槽位）',
       'export save -p "XX\\XX\\XX" 导出存档文件到XX\\XX\\XX路径',
       'import save -p "YY\\YY\\YY" 从YY\\YY\\YY路径导入存档文件',
       'export slot -p "XX\\XX\\XX" 导出存档槽位文件到XX\\XX\\XX路径',
       'import slot -p "YY\\YY\\YY" 从YY\\YY\\YY路径导入存档槽位文件',
-      'olpg on/off 开启/关闭离线进度'
+      'olpg on/off 开启/关闭离线进度（关闭游戏后再次打开时按离开时长补发资源 a）'
     ] },
     'c -action': { title: ' 游戏操作 ', w: 68, lines: [
-      'tree 查看当前目录下的文件夹树', 'cd <路径> 跳转到某一目录（通常可简写，效果是一样的）',
+      'tree 查看当前目录下的文件夹树',
+      'cd <路径> 跳转到某一目录（通常可简写，效果是一样的）',
       'info/cd ~\\game1-xri\\information 查看基本信息和统计数据',
       'atb/cd ~\\game1-xri\\automation\\autobuyer 查看自动购买器',
       'res_a/cd ~\\game1-xri\\a\\a_resource 查看a资源信息',
       'buff_a/cd ~\\game1-xri\\a\\a_buff 查看a类可重复购买的购买项信息',
       'upg_a/cd ~\\game1-xri\\a\\a_upgrade 查看a类升级信息',
       'rst_a/cd ~\\game1-xri\\a\\a_reset 查看a类声望层(层级重置)信息',
-      'ach/cd ~\\game1-xri\\achievement 查看成就', 'aux/cd ~\\game1-xri\\auxiliary 查看辅助功能',
+      'ach/cd ~\\game1-xri\\achievement 查看成就',
+      'aux/cd ~\\game1-xri\\auxiliary 查看辅助功能',
       'Ax… on/off 开启/关闭某个辅助功能（在开启Ax14前，须在~\\game1-xri\\auxiliary目录下操作）',
-      'Ax_all on/off 开启/关闭所有辅助功能', 'warn -min 显示购买提醒最小间隔（秒）',
-      'warn -min=N 设置购买提醒最小间隔（秒）', 'rishow_a 显示a资源增长曲线',
+      'Ax_all on/off 开启/关闭所有辅助功能（在开启Ax14前，须在~\\game1-xri\\auxiliary目录下操作）',
+      'warn -min 显示当前购买项两次提醒最小间隔（单位：秒）',
+      'warn -min=N 设置购买提醒最小间隔（秒）。同一购买项两次提醒间隔小于 N 秒时自动降频（两次一提醒→三次…，见Ax9/Ax10，由 warn -min 统一控制）',
+      'rishow_a 显示a资源增长曲线（res_a 会叠加显示数量/速度/峰值）',
       'show 显示当前目录下的内容（不受Ax3开关影响）',
-      'scr.num=… 分配数量（需解锁Ax11）', 'cmd/cmd.add/cmd.del/cmd.list 自定义命令（须先开启Ax10）',
-      'collapse <路径> 折叠/展开 tree 中的文件夹'
+      'scr.num=… 分配数量（需解锁Ax11后才会显示，未解锁时输入返回通用错误提示）',
+      'cmd / cmd.add / cmd.del / cmd.list 自定义命令（须先开启Ax10，详见 cmd 命令）',
+      '（本版扩展：collapse <路径> 折叠/展开文件夹树；color <主题名> 切换配色）'
     ] },
     'c -others': { title: ' 其他命令 ', w: 56, lines: [
-      'echo <文本> 打印一条信息', 'date 显示当前日期（实时）', 'time 显示当前时间（实时）',
-      'color 查看当前配色主题', 'color default/ocean/amber/mono 切换配色主题'
+      'echo <文本> 打印一条信息',
+      'date 显示当前日期（实时）',
+      'time 显示当前时间（实时）'
     ] },
-    'c -dev': { title: ' dev命令 ', w: 60, lines: [] }
+    'c -dev': { title: ' dev命令 ', w: 64, lines: [] }
   };
   function help() {
     term.box(' HELP ', [
-      seg(G_BULLET + ' c -basic    查看基本命令', C.Front),
-      seg(G_BULLET + ' c -save     查看存档相关命令', C.Front),
-      seg(G_BULLET + ' c -action   查看游戏操作相关命令', C.Front),
-      seg(G_BULLET + ' c -others   查看其他命令', C.Front),
-      seg(G_BULLET + ' c -dev      查看dev命令', C.Front)
-    ], { color: C.AquaSky, width: 42 });
+      seg(G_BULLET + ' c -basic   查看基本命令', C.Front),
+      seg(G_BULLET + ' c -save    查看存档相关命令', C.Front),
+      seg(G_BULLET + ' c -action  查看游戏操作相关命令', C.Front),
+      seg(G_BULLET + ' c -music   查看音乐相关命令', C.Front),
+      seg(G_BULLET + ' c -others  查看其他命令', C.Front),
+      seg(G_BULLET + ' c -dev     查看dev命令', C.Front)
+    ], { color: C.AquaSky, width: 60 });
     term.push([seg('输入以上命令之一以查看该分类下的全部命令。', C.PaleYellow)]);
   }
   function helpCat(cat) {
@@ -313,11 +452,13 @@
     var lines;
     if (cat === 'c -dev') {
       lines = state.devMode
-        ? ['dev.start 进入dev模式（已处于dev模式）', 'res_a=… 设置a资源的数量（res_b=… res_c=…以此类推）[支持科学计数法和大数库]']
+        ? ['dev.start 进入dev模式（已处于dev模式）',
+           'res_a=… 设置a资源的数量（res_b=… res_c=…以此类推）[支持科学计数法和大数库]']
         : ['dev命令需在dev模式下使用。', '输入 dev.start 并输入密码以进入dev模式。'];
     } else lines = info.lines;
-    term.box(info.title, lines.map(function (l) { return seg(l, cat === 'c -dev' && !state.devMode ? C.PaleYellow : C.Front); }),
-      { color: C.AquaSky, width: info.w });
+    term.box(info.title, lines.map(function (l) {
+      return seg(l, (cat === 'c -dev' && !state.devMode) || String(l).indexOf('（本版') === 0 ? C.PaleYellow : C.Front);
+    }), { color: C.AquaSky, width: info.w });
   }
 
   // ---------- 购买 ----------
@@ -326,15 +467,15 @@
     var done = 0;
     for (var k = 0; k < times; k++) {
       var cnt = core.buyCount(state, it.id), price = core.buyPriceBase(it, cnt);
-      if (state.a.amount >= price) {
-        state.a.amount -= price;
+      if (core.numGte(state.a.amount, price)) {
+        state.a.amount = core.numSub(state.a.amount, price);
         state.buys[it.id] = cnt + 1;
         done++;
       } else break;
     }
     if (done > 0) {
       state.a.rate = core.computeRate(state);
-      if (state.a.amount > state.maxAmountA) state.maxAmountA = state.a.amount;
+      if (core.numCmp(state.a.amount, state.maxAmountA) > 0) state.maxAmountA = state.a.amount;
       core.writeSlot(playerName, currentSlot, state);
       if (times > 1) {
         term.push([seg(G_SPARK + ' 已批量购买 ' + it.id + ' ×' + done + '（请求 ' + times + ' 次，生效 ' + done + ' 次）：' + it.content + ' ' + it.effect(state), C.AquaSky)]);
@@ -384,7 +525,8 @@
   }
 
   // ---------- 命令分发 ----------
-  function executeCommand(raw) {
+  function executeCommand(raw, depth) {
+    depth = depth || 0;
     var command = raw.trim();
     if (!command) return;
 
@@ -393,6 +535,9 @@
       devPasswordPending = false;
       if (command === core.DEV_PASSWORD) {
         state.devMode = true;
+        // 策划案 S FuncX：dev 模式下所有辅助功能均为已解锁状态
+        Object.keys(state.auxOn).forEach(function (k) { state.auxOn[k] = true; });
+        syncEditor();
         term.push([seg('密码正确，已进入 dev 模式。', C.PaleGreen)]);
         document.title = 'Console Incremental @ ' + VERSION + ' (dev mode)';
         core.writeSlot(playerName, currentSlot, state);
@@ -418,6 +563,25 @@
 
     if (command === 'help') { help(); return; }
     if (HELP_CATS[command]) { helpCat(command); return; }
+    // Ax5：更好的终端（Func17）命令块编辑
+    if (state.auxOn.Ax5 && command.indexOf('insert') === 0) {
+      if (command === 'insert') {
+        var t = term.selectedBlockText();
+        if (t) { term.setInput(t); term.push([seg('已把选中命令取回输入框，编辑后按回车执行。', C.PaleGreen)]); }
+        else term.push([seg('请先选中命令块（sel <序号> 或点击命令行）。', C.PaleYellow)]);
+      } else {
+        var ic = command.slice(6).trim();
+        if (ic) { echoCommand(ic); executeCommand(ic, depth + 1); }
+        else term.push([seg('用法：insert <命令> 或 insert（取回选中命令）', C.PaleYellow)]);
+      }
+      return;
+    }
+    if (state.auxOn.Ax5 && /^(copy|cut|paste|del|mov|sel|unsel)(\s|$)/.test(command)) {
+      var er = term.editorCommand(command);
+      if (er.msg) term.push([seg(er.msg, er.ok ? C.PaleGreen : C.PaleYellow)]);
+      else unknownCommand(command);
+      return;
+    }
     if (command === 'version') { term.push([seg('Console Incremental @ ' + VERSION, C.AquaSky)]); return; }
     if (command === 'tutorial on') { state.tutorialOn = true; term.push([seg('教程已开启。', C.PaleGreen)]); return; }
     if (command === 'tutorial off') { state.tutorialOn = false; term.push([seg('教程已关闭。', C.PaleGreen)]); return; }
@@ -452,23 +616,32 @@
       core.writeSlot(playerName, currentSlot, state);
       term.push([seg(G_DOT + ' Saved. (slot ' + currentSlot + ')', C.PaleGreen)]); return;
     }
+    if (command === 'olpg') { term.push([seg('用法：olpg on / olpg off', C.PaleYellow)]); return; }
     if (command === 'olpg on') { state.olpgOn = true; core.writeSlot(playerName, currentSlot, state); term.push([seg(G_DOT + ' 离线进度已开启。关闭游戏后再次打开时将按离开时长补发资源 a。', C.PaleGreen)]); return; }
     if (command === 'olpg off') { state.olpgOn = false; core.writeSlot(playerName, currentSlot, state); term.push([seg(G_DOT + ' 离线进度已关闭。', C.PaleGreen)]); return; }
-    if (command === 'save.hardreset') {
+    if (command === 'save.hardreset' || command === 'rm save') {
       core.deleteSave(playerName);
-      term.push([seg(G_DOT + ' 存档已清除，正在返回用户名输入界面…', C.PaleYellow)]);
-      setTimeout(function () { flowName(); }, 400); return;
+      term.push([seg(G_DOT + ' 存档已清除，返回用户名输入界面。', C.PaleYellow)]);
+      setTimeout(function () { inShell = false; flowName(); }, 400); return;
     }
-    if (command === 'slot.hardreset') {
+    if (command === 'slot.hardreset' || command === 'rm slot') {
       core.clearSlot(playerName, currentSlot);
-      term.push([seg(G_DOT + ' 槽位 ' + currentSlot + ' 已清除，正在返回槽位选择界面…', C.PaleYellow)]);
-      setTimeout(function () { flowSlot(); }, 400); return;
+      term.push([seg(G_DOT + ' 槽位 ' + currentSlot + ' 已清除，返回槽位选择界面。', C.PaleYellow)]);
+      setTimeout(function () { inShell = false; flowSlot(); }, 400); return;
     }
 
     // 导入/导出（HTML 版：加密串存于浏览器本地键，路径即键名）
-    var exp = /^(export|import)\s+(save|slot)\s+-p\s+"?([^"]+)"?$/.exec(command);
-    if (exp) {
-      var action = exp[1], kind = exp[2], pathName = exp[3];
+    // 与 C++ tokenizeQuoted 一致：-p 可出现在任意位置，路径可用引号包裹
+    if (/^(export|import)\b/.test(command)) {
+      var tk = command.match(/"[^"]*"|'[^']*'|\S+/g) || [];
+      var action = tk[0], kind = tk[1] || '', pi = tk.indexOf('-p');
+      var pathName = pi >= 0 && tk[pi + 1] ? tk[pi + 1].replace(/^["']|["']$/g, '') : '';
+      if (kind !== 'save' && kind !== 'slot') {
+        term.push([seg('Usage: ' + action + ' save|slot -p "path"', C.RedDusted)]); return;
+      }
+      if (!pathName) {
+        term.push([seg('Usage: ' + action + ' ' + kind + ' -p "path"', C.RedDusted)]); return;
+      }
       var key = 'ci_export_' + pathName;
       if (action === 'export') {
         var data = core.exportData(playerName, kind === 'save' ? null : currentSlot);
@@ -478,30 +651,50 @@
         var text = null; try { text = localStorage.getItem(key); } catch (e) {}
         if (text && core.importData(text, playerName, kind === 'save' ? null : currentSlot)) {
           term.push([seg(G_DOT + ' 已导入' + kind + '，正在返回槽位选择界面…', C.PaleGreen)]);
-          setTimeout(function () { flowSlot(); }, 400);
+          setTimeout(function () { inShell = false; flowSlot(); }, 400);
         } else term.push([seg('导入失败：未找到数据或路径无效', C.RedDusted)]);
       }
       return;
     }
 
-    // 配色主题
+    // color：C++ 用 0-F 索引设置默认前景色；本版额外保留主题名
     if (command === 'color') {
-      term.push([seg('当前配色主题：' + core.getTheme(), C.PaleYellow)]);
-      term.push([seg('可用主题：' + Object.keys(core.THEMES).join(' / ') + '  —— 输入 color <名称> 切换。', C.Front)]);
+      term.push([seg('Usage: color <0-F>  (sets default text color, 0=black … F=white)', C.PaleYellow)]);
+      term.push([seg('本版另支持 color <主题名>（' + Object.keys(core.THEMES).join(' / ') +
+        '）；当前主题：' + core.getTheme() + '，前景色索引：' + state.defaultFg, C.Gray)]);
       return;
     }
     var colorM = /^color\s+(\S+)$/.exec(command);
-    if (colorM) { applyTheme(colorM[1]); return; }
+    if (colorM) {
+      var ca = colorM[1];
+      if (/^[0-9a-fA-F]$/.test(ca)) {
+        var idx = parseInt(ca, 16);
+        state.defaultFg = idx;
+        core.PALETTE.FRONT = core.FG16[idx];
+        syncCssTheme(); term.repaint();
+        core.writeSlot(playerName, currentSlot, state);
+        term.push([seg('Default text color set to index ' + idx + '.', C.PaleGreen)]);
+      } else if (!applyTheme(ca)) {
+        term.push([seg('Usage: color <0-F>  (sets default text color)', C.RedDusted)]);
+      }
+      return;
+    }
 
-    if (command === 'echo') { term.push([seg('', C.Front)]); return; }
     if (command.indexOf('echo ') === 0) { term.push([seg(command.slice(5), C.Front)]); return; }
-    if (command === 'date') { term.push([seg(new Date().toLocaleDateString('zh-CN'), C.Front)]); return; }
-    if (command === 'time') { term.push([seg(new Date().toLocaleTimeString('zh-CN'), C.Front)]); return; }
+    if (command === 'date') {
+      term.pushLive(function () { return [seg('当前日期：' + currentDateStr(), C.PaleYellow)]; });
+      return;
+    }
+    if (command === 'time') {
+      term.pushLive(function () { return [seg('当前时间：' + currentClock(), C.PaleYellow)]; });
+      return;
+    }
     if (command === 'cls' || command === 'clear') { term.clear(); term.focus(); return; }
     if (command === 'exit') {
       core.writeSlot(playerName, currentSlot, state);
       term.push([seg(G_SPARK + '  Goodbye, ' + playerName + '.  ' + G_SPARK, C.PaleYellow)]);
-      term.push([seg('（HTML 版无法关闭标签页，可安全关闭此页面。）', C.Gray)]); return;
+      term.push([seg('（已退出；HTML 版无法关闭标签页，重新加载页面可再次进入。）', C.Gray)]);
+      inShell = false; return;
     }
 
     // 新闻
@@ -512,11 +705,9 @@
     if (command === 'news off') { windows.newsStop(); term.push([seg('滚动新闻已关闭。', C.PaleGreen)]); return; }
 
     // 音乐已移除：给出明确反馈，避免误判为拼写错误
+    // （c -music 分类仍保留在 help 中，内容标注「本版本已移除」，与命令一览对齐）
     if (/^(music|vol)(\s|\.|=|$)/.test(command)) {
       term.push([seg('音乐功能已在本版本移除（不含背景音乐）。', C.Gray)]); return;
-    }
-    if (command === 'c -music') {
-      term.push([seg('音乐相关命令已随背景音乐一并移除。', C.Gray)]); return;
     }
 
     // dev 模式
@@ -525,45 +716,62 @@
       term.push([seg('请输入 dev 模式密码：', C.PaleYellow)]);
       devPasswordPending = true; return;
     }
-    if (/^res_[a-z]=/.test(command)) {
-      var eq = command.indexOf('='), key = command.slice(4, eq), val = command.slice(eq + 1).trim();
-      if (!state.devMode && !state.auxOn.Ax14) { term.push([seg('该命令为 dev 模式独有，请先输入 dev.start。', C.RedDusted)]); return; }
+    if (/^res_[a-z]\s*=/.test(command)) {
+      var eq = command.indexOf('='), key = command.slice(4, eq).trim(), val = command.slice(eq + 1).trim();
+      if (!state.devMode) { term.push([seg('res_…= 是 dev 模式专属命令，请先通过 dev.start 进入 dev 模式。', C.RedDusted)]); return; }
       if (key !== 'a') { term.push([seg('资源 ' + key + ' 尚未加入游戏。', C.PaleYellow)]); return; }
       var num = core.parseNum(val);
-      if (isNaN(num)) { term.push([seg('无法解析数值：' + val, C.RedDusted)]); return; }
+      if (!core.numValid(num)) { term.push([seg('无法解析数值：' + val, C.RedDusted)]); return; }
       state.a.amount = num; state.a.rate = core.computeRate(state);
-      if (num > state.maxAmountA) state.maxAmountA = num;
+      if (core.numCmp(num, state.maxAmountA) > 0) state.maxAmountA = num;
       core.writeSlot(playerName, currentSlot, state);
       term.push([seg(G_DOT + ' 资源 a 数量已设为 ' + core.fmtNum(num) + '。', C.PaleGreen)]); return;
     }
 
-    // 自定义命令（Ax10）
-    if (command === 'cmd' || command === 'cmd.list') {
-      if (!state.auxOn.Ax10) { term.push([seg('须先开启 Ax10。', C.PaleYellow)]); return; }
+    // 自定义命令（Ax10 / Func18）：对齐 C++ cmd / cmd.add / cmd.del / cmd.list
+    if (command === 'cmd' || command === 'cmd list' || command === 'cmd.list' || command.indexOf('cmd ') === 0) {
+      if (!state.auxOn.Ax10) {
+        term.push([seg('自定义命令功能未开启。请先开启 Ax10（须在 ~\\game1-xri\\auxiliary 目录下输入 Ax10 on）。', C.PaleYellow)]);
+        return;
+      }
       var names = Object.keys(state.customCmds);
-      term.push([seg(command === 'cmd' ? '用法：cmd.add <名> <命令体(用&&分隔)> / cmd.del <名> / cmd.list' : '自定义命令列表：', C.PaleYellow)]);
-      if (command === 'cmd.list') {
-        if (!names.length) term.push([seg('  （空）', C.Gray)]);
-        else names.forEach(function (nm) { term.push([seg('  ' + nm + ' = ' + state.customCmds[nm], C.Front)]); });
+      if (command === 'cmd' || command === 'cmd list' || command === 'cmd.list') {
+        if (!names.length) term.push([seg('当前没有自定义命令。', C.PaleYellow)]);
+        else {
+          term.push([seg('自定义命令列表（开启 Ax10 后输入名称即可执行）：', C.PaleYellow)]);
+          names.forEach(function (nm) { term.push([seg('  ' + nm + '  →  ' + state.customCmds[nm], C.Front)]); });
+        }
+        term.push([seg('用法：cmd.add <名称> <命令体> | cmd.del <名称> | cmd.list', C.Gray)]);
+      } else {
+        term.push([seg('未知的子命令。用法：cmd.add <名称> <命令体> | cmd.del <名称> | cmd.list', C.PaleYellow)]);
       }
       return;
     }
-    var cmdAdd = /^cmd\.add\s+(\S+)\s+(.+)$/.exec(command);
+    var cmdAdd = /^cmd\.add(?:\s+(\S*))?(?:\s+(.+))?$/.exec(command);
     if (cmdAdd) {
-      if (!state.auxOn.Ax10) { term.push([seg('须先开启 Ax10。', C.PaleYellow)]); return; }
-      var nm = cmdAdd[1], body = cmdAdd[2];
-      if (state.customCmds[nm] !== undefined || GLOBAL_CMDS.indexOf(nm) >= 0 || core.findBuyItem(nm)) {
-        term.push([seg('命令名已被占用。', C.RedDusted)]); return;
+      if (!state.auxOn.Ax10) { term.push([seg('自定义命令功能未开启。请先开启 Ax10。', C.PaleYellow)]); return; }
+      var nm = (cmdAdd[1] || '').trim(), body = (cmdAdd[2] || '').trim();
+      if (!nm || !body) {
+        term.push([seg('用法：cmd.add <名称> <命令体>（名称和命令体均不能为空）', C.PaleYellow)]); return;
       }
+      if (/[\s=;]/.test(nm) || nm.indexOf('cmd') === 0) {
+        term.push([seg("自定义命令名称须为不含空格、'=' 且不以 cmd 开头的单个词。", C.RedDusted)]); return;
+      }
+      if (reservedCmd(nm)) {
+        term.push([seg('名称 ' + nm + ' 与已有命令冲突，请换一个名称。', C.RedDusted)]); return;
+      }
+      var existed = state.customCmds[nm] !== undefined;
       state.customCmds[nm] = body; core.writeSlot(playerName, currentSlot, state);
-      term.push([seg('已添加自定义命令 ' + nm + '。', C.PaleGreen)]); return;
+      term.push([seg((existed ? '已更新自定义命令 ' : '已添加自定义命令 ') + nm + ' → ' + body, C.PaleGreen)]); return;
     }
-    var cmdDel = /^cmd\.(del|rm)\s+(\S+)$/.exec(command);
+    var cmdDel = /^cmd\.(del|rm)\s*(\S*)$/.exec(command);
     if (cmdDel) {
-      if (!state.auxOn.Ax10) { term.push([seg('须先开启 Ax10。', C.PaleYellow)]); return; }
-      if (state.customCmds[cmdDel[2]] === undefined) { term.push([seg('未找到自定义命令。', C.RedDusted)]); return; }
-      delete state.customCmds[cmdDel[2]]; core.writeSlot(playerName, currentSlot, state);
-      term.push([seg('已删除自定义命令 ' + cmdDel[2] + '。', C.PaleGreen)]); return;
+      if (!state.auxOn.Ax10) { term.push([seg('自定义命令功能未开启。请先开启 Ax10。', C.PaleYellow)]); return; }
+      var dn = cmdDel[2];
+      if (!dn) { term.push([seg('用法：cmd.del <名称>', C.PaleYellow)]); return; }
+      if (state.customCmds[dn] === undefined) { term.push([seg('未找到自定义命令 ' + dn, C.RedDusted)]); return; }
+      delete state.customCmds[dn]; core.writeSlot(playerName, currentSlot, state);
+      term.push([seg('已删除自定义命令 ' + dn, C.PaleGreen)]); return;
     }
 
     // 辅助功能开关
@@ -572,36 +780,65 @@
       var id = axm[1], on = axm[2] === 'on';
       if (!(id in state.auxOn)) { term.push([seg('未识别的辅助功能：' + id, C.RedDusted)]); return; }
       if (state.cwd !== '~\\game1-xri\\auxiliary' && !state.auxOn.Ax14 && !state.devMode) {
-        term.push([seg('须在 ~\\game1-xri\\auxiliary 目录下操作（或开启 Ax14）。', C.RedDusted)]); return;
+        term.push([seg('须在 ~\\game1-xri\\auxiliary 目录下操作，或开启 Ax14。', C.PaleYellow)]); return;
       }
-      if (id === 'Ax15' && !on) { term.push([seg('Ax15 解锁后无法关闭。', C.PaleYellow)]); return; }
+      if (id === 'Ax15') {
+        if (on) {
+          state.auxOn[id] = true; core.writeSlot(playerName, currentSlot, state);
+          term.push([seg('Ax15 已开启（批量执行 *n：命令后可加 *n 重复执行 n 遍；解锁后无法关闭）。', C.PaleGreen)]);
+        } else term.push([seg('Ax15（批量执行功能）解锁后无法关闭。', C.PaleYellow)]);
+        return;
+      }
       state.auxOn[id] = on; core.writeSlot(playerName, currentSlot, state);
-      term.push([seg(G_DOT + ' ' + id + ' 已' + (on ? '开启' : '关闭') + '。', C.PaleGreen)]);
-      if (id === 'Ax11' && !on) windows.splitStop();
+      if (id === 'Ax5') syncEditor();
+      if (!on && id === 'Ax9') { remindLast = {}; remindStep = {}; windows.toastHide(); }
+      if (!on && id === 'Ax7') { treeCollapsed = {}; }
+      if (!on && id === 'Ax11') windows.splitStop();
+      term.push([seg(id + ' 已' + (on ? '开启' : '关闭') + '。', C.PaleGreen)]);
+      if (on && id === 'Ax5') ax5Help();
+      if (on && id === 'Ax6') {
+        term.push([seg('更好的资源信息：输入 res_a 或 rishow_a 时显示资源增长曲线（半透明玻璃面板 + 发光折线）。', C.PaleYellow)]);
+        term.push([seg(' · rishow_a 只显示曲线；res_a 在曲线面板顶部叠加资源数量 / 速度 / 峰值，Y 轴随数值自动缩放。关闭后 res_a 恢复为普通资源文本。', C.PaleYellow)]);
+      }
+      if (on && id === 'Ax7') {
+        term.push([seg('更好的文件夹树：输入 tree 时以美化面板显示文件夹树，目录可点击跳转、文件夹可折叠。', C.PaleYellow)]);
+        term.push([seg(' · 点击文件夹【名称】进入该目录；点击 [+]/[-] 折叠/展开其子目录。', C.PaleYellow)]);
+        term.push([seg(' · 折叠状态在会话内保持；关闭后 tree 恢复为普通文本树。', C.PaleYellow)]);
+      }
       if (state.cwd === '~\\game1-xri\\a\\a_resource' || state.cwd === '~\\game1-xri\\auxiliary') showView(state.cwd);
       return;
     }
     if (command === 'Ax_all on' || command === 'Ax_all off') {
       if (state.cwd !== '~\\game1-xri\\auxiliary' && !state.auxOn.Ax14 && !state.devMode) {
-        term.push([seg('须在 ~\\game1-xri\\auxiliary 目录下操作（或开启 Ax14）。', C.RedDusted)]); return;
+        term.push([seg('须在 ~\\game1-xri\\auxiliary 目录下操作，或开启 Ax14。', C.PaleYellow)]); return;
       }
-      var val = command.endsWith('on');
+      var val = command.slice(-2) === 'on';
       Object.keys(state.auxOn).forEach(function (k) { if (k !== 'Ax15') state.auxOn[k] = val; });
       core.writeSlot(playerName, currentSlot, state);
-      term.push([seg(G_DOT + ' 所有辅助功能已' + (val ? '开启' : '关闭') + '。', C.PaleGreen)]); return;
+      syncEditor();
+      if (!val) { remindLast = {}; remindStep = {}; treeCollapsed = {}; windows.toastHide(); windows.splitStop(); }
+      term.push([seg('所有辅助功能已' + (val ? '开启' : '关闭') + '。', C.PaleGreen)]);
+      if (state.cwd === '~\\game1-xri\\a\\a_resource' || state.cwd === '~\\game1-xri\\auxiliary') showView(state.cwd);
+      return;
     }
 
     // scr.num=
     if (command.indexOf('scr.num=') === 0) {
-      if (!state.auxOn.Ax11 && !state.devMode) { term.push([seg("'" + command + "' is not a recognized command.", C.RedDusted)]); return; }
-      var nn = core.parseNum(command.slice(8));
-      var maxSplit = state.devMode ? 32 : 8;
-      if (isNaN(nn) || nn < 1) { term.push([seg('用法：scr.num=<n>（n≥1）', C.PaleYellow)]); return; }
-      nn = Math.min(maxSplit, Math.floor(nn));
+      if (!state.auxOn.Ax11 && !state.devMode) { unknownCommand(command); return; }
+      var rawN = command.slice(8).trim(), maxSplit = state.devMode ? 32 : 8;
+      var okN = /^\d+$/.test(rawN), nn = okN ? parseInt(rawN, 10) : 0;
+      if (!okN || nn < 1) {
+        term.push([seg('用法：scr.num=<数量>  数量须为 ≥1 的整数（分屏数量，上限 8）', C.RedDusted)]); return;
+      }
+      if (nn > maxSplit) {
+        term.push([seg('分屏数量上限为 ' + maxSplit + '，已自动限制为 ' + maxSplit + '。', C.Front)]);
+        nn = maxSplit;
+      }
       state.splitCount = nn; core.writeSlot(playerName, currentSlot, state);
-      if (nn <= 1) windows.splitStop();
+      if (nn === 1) windows.splitStop();
       else windows.splitStart(nn, splitContent);
-      term.push([seg('分屏数量已设为 ' + nn + (nn <= 1 ? '（不分屏）' : '，分屏窗口已渲染。'), C.PaleGreen)]);
+      term.push([seg('已分配 ' + nn + ' 个分屏。', C.PaleGreen)]);
+      term.push([seg(nn === 1 ? '（1 表示不分屏，仅使用主窗口）' : '分屏窗口已渲染。', C.Gray)]);
       return;
     }
 
@@ -616,6 +853,7 @@
     if (command === '~') { navigateTo('~'); return; }
     if (command === 'show' || command === 'show()') { showView(state.cwd); return; }
     if (command === 'tree') {
+      if (state.auxOn.Ax7) { emitTreeAx7(); return; }
       term.push([seg('文件夹树（当前目录：' + state.cwd + '）', C.PaleYellow)]);
       term.push([seg(state.cwd, C.Front)]);
       printTree(state.cwd, '', false);
@@ -643,21 +881,23 @@
       }
       return;
     }
-    if (command === 'rishow_a' || command === 'rishow' || command === 'rishow_a()') {
+    if (command === 'rishow_a' || command === 'rishow_a()' || command === 'rishow' || command === 'rishow()') {
       curvePanel();
       term.push([seg('资源 a：' + core.fmtNum(state.a.amount) + '   速度：+' + core.fmtNum(state.a.rate) + '/s', C.Front)]);
       return;
     }
-    if (command === 'warn' || command === 'warn -min') {
-      term.push([seg('当前购买项两次提醒最小时间间隔：' + state.warnMin + ' 秒。', C.Front)]); return;
-    }
-    if (command.indexOf('warn -min=') === 0) {
-      var wv = core.parseNum(command.slice(10));
-      if (!isNaN(wv) && wv >= 1 && wv <= 600) {
+    // warn：与 C++ 一样，任意以 warn 开头的命令都进入本分支
+    if (command.indexOf('warn') === 0) {
+      var wm = /-min\s*=\s*(\d+)/.exec(command);
+      if (!wm) {
+        term.push([seg('购买提醒最小间隔 n = ' + Math.floor(state.warnMin) +
+          ' 秒（用法：warn -min=N，N 为秒数，例如 warn -min=30）', C.PaleGreen)]);
+      } else {
+        var wv = Math.min(600, Math.max(1, parseInt(wm[1], 10)));
         state.warnMin = wv; core.writeSlot(playerName, currentSlot, state);
-        remindLast = {}; remindStep = {};
-        term.push([seg('已设置提醒最小间隔为 ' + wv + ' 秒。', C.PaleGreen)]);
-      } else term.push([seg('用法：warn -min=N（N 为 1–600 秒）', C.PaleYellow)]);
+        Object.keys(remindStep).forEach(function (k) { remindStep[k] = 1; });
+        term.push([seg('购买提醒最小间隔已设为 ' + wv + ' 秒。', C.PaleGreen)]);
+      }
       return;
     }
 
@@ -665,20 +905,36 @@
     var item = core.findBuyItem(command);
     if (item && (item.path === state.cwd || state.auxOn.Ax14 || state.devMode)) { buy(item, 1); return; }
 
-    // Ax10 自定义命令执行
+    // Ax10 自定义命令执行（对齐 C++：&& 链式 + 16 层递归保护，防自引用死循环）
     if (state.auxOn.Ax10 && state.customCmds[command] !== undefined) {
-      state.customCmds[command].split('&&').forEach(function (part) { executeCommand(part.trim()); });
+      if (depth >= 16) {
+        term.push([seg('自定义命令嵌套过深，已停止执行（' + command + '）。', C.RedDusted)]); return;
+      }
+      state.customCmds[command].split('&&').forEach(function (part) {
+        if (part.trim()) executeCommand(part.trim(), depth + 1);
+      });
       return;
     }
 
-    term.push([seg("'" + command + "' is not a recognized command.", C.RedDusted)]);
+    unknownCommand(command);
   }
 
   // ---------- 回显（语法高亮）----------
   function echoCommand(cmd) {
     var p = core.promptPrefix(state);
-    term.push([seg(p, 'Front')].concat(highlightCommand(cmd)));
+    var en = term.push([seg(p, 'Front')].concat(highlightCommand(cmd)));
+    term.markCommand(en);   // Ax5：标记命令块起点
   }
+  // Ax5 开启时的编辑器说明（对齐 C++ Ax5 on 分支）
+  function ax5Help() {
+    term.push([seg('更好的终端（类编辑器）：', C.PaleYellow)]);
+    term.push([seg(' · 点击历史命令行以选中（Ctrl+点击可多选）；选中块左侧有 ▌ 标记。', C.PaleYellow)]);
+    term.push([seg(' · Ctrl+C 复制、Ctrl+X 剪切、Ctrl+V 在选中处粘贴；Ctrl+K 删除选中块（命令+结果一起）。', C.PaleYellow)]);
+    term.push([seg(' · Ctrl+↑/↓ 上下移动选中块（结果随命令一起移动、始终在命令下方）。', C.PaleYellow)]);
+    term.push([seg(' · 也可用命令：copy / cut / paste / del / mov up|down / sel <序号> / unsel / insert。', C.PaleYellow)]);
+    term.push([seg(' · Ctrl+Enter 把选中命令取回输入框就地编辑后执行。', C.PaleYellow)]);
+  }
+  function syncEditor() { term.setEditorEnabled(!!state.auxOn.Ax5); }
   function escapeHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
@@ -700,7 +956,7 @@
     var bar = document.getElementById('statusbar');
     if (!bar) return;
     var clock = new Date().toLocaleTimeString('zh-CN');
-    var txt = [playerName, currentSlot, state.cwd, Math.floor(state.a.amount), Math.floor(state.a.rate), clock].join('|');
+    var txt = [playerName, currentSlot, state.cwd, core.fmtNum(state.a.amount), core.fmtNum(state.a.rate), clock].join('|');
     if (txt === lastStatusText) return;
     lastStatusText = txt;
     bar.innerHTML = '';
@@ -808,12 +1064,12 @@
     lastTick = now;
     if (inShell) {
       state.a.rate = core.computeRate(state);
-      state.a.amount += state.a.rate * dt;
-      if (state.a.amount > state.maxAmountA) state.maxAmountA = state.a.amount;
+      state.a.amount = core.numAdd(state.a.amount, state.a.rate * dt);
+      if (core.numCmp(state.a.amount, state.maxAmountA) > 0) state.maxAmountA = state.a.amount;
       // 曲线历史（每 ~0.5s 采样）
       if (!loop._acc) loop._acc = 0;
       loop._acc += dt;
-      if (loop._acc > 0.5) { loop._acc = 0; resHistory.push(state.a.amount); if (resHistory.length > 200) resHistory.shift(); }
+      if (loop._acc > 0.5) { loop._acc = 0; resHistory.push(core.numToDouble(state.a.amount)); if (resHistory.length > 200) resHistory.shift(); }
       // 自动保存（每 30s）
       if (now - lastAutoSave > 30000) { lastAutoSave = now; core.writeSlot(playerName, currentSlot, state); }
       // Ax8 终端提醒 / Ax9 浮层提醒
@@ -972,9 +1228,6 @@
   function flowName() {
     var saves = [];
     try { saves = core.listSaves() || []; } catch (e) { saves = []; }
-    var suggestHtml = saves.length ? '<div class="flow-suggest">检测到已有存档，点击填入：' + saves.map(function (s) {
-      return '<span class="save-chip" data-name="' + escapeHtml(s) + '">' + escapeHtml(s) + '</span>';
-    }).join('') + '</div>' : '';
     showFlow(
       '<div class="flow-card">' + stepBar(1) +
       '<div class="flow-kicker">SESSION / 01</div>' +
@@ -986,11 +1239,36 @@
         '<input id="nameInput" class="flow-input" autocomplete="off" placeholder="Player name" />' +
         '<button class="flow-btn primary" id="nameContinue">继续 <span>▸</span></button>' +
       '</div>' +
-      suggestHtml +
+      '<div id="saveSuggest" class="flow-suggest"></div>' +
       '<div class="flow-hint">按回车或点击「继续」</div>' +
       '</div>'
     );
     var inp = document.getElementById('nameInput');
+    var box = document.getElementById('saveSuggest');
+    // Func2：输入中包含已有存档名的任意字符/字符串时，下方显示这些存档的信息；
+    // 点击某条自动补全玩家名，回车后读取该存档。
+    function renderSuggest() {
+      if (!box) return;
+      var q = inp ? inp.value.trim() : '';
+      var matched = saves.filter(function (s) {
+        return q ? s.toLowerCase().indexOf(q.toLowerCase()) >= 0 : true;
+      });
+      if (!matched.length) { box.innerHTML = ''; box.style.display = 'none'; return; }
+      box.style.display = 'block';
+      box.innerHTML = '<div class="suggest-title">' + (q ? '匹配的已有存档' : '检测到已有存档') + '（点击填入）：</div>' +
+        matched.map(function (s) {
+          var info = null;
+          try { info = core.saveInfo(s); } catch (e) {}
+          var line = '存档 ' + escapeHtml(s);
+          if (info) line += '<span class="suggest-meta">上次保存：槽位' + info.lastSlot + ':' + escapeHtml(info.summary) + '</span>';
+          return '<div class="save-chip" data-name="' + escapeHtml(s) + '">' + line + '</div>';
+        }).join('');
+      Array.prototype.forEach.call(box.querySelectorAll('.save-chip'), function (chip) {
+        chip.addEventListener('click', function () {
+          if (inp) { inp.value = chip.getAttribute('data-name'); inp.focus(); renderSuggest(); }
+        });
+      });
+    }
     function submit() {
       var name = inp ? inp.value.trim() : '';
       if (!name) {
@@ -1011,14 +1289,11 @@
     if (inp) {
       inp.focus();
       inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
+      inp.addEventListener('input', renderSuggest);
     }
     var cont = document.getElementById('nameContinue');
     if (cont) cont.addEventListener('click', submit);
-    Array.prototype.forEach.call(flowEl.querySelectorAll('.save-chip'), function (chip) {
-      chip.addEventListener('click', function () {
-        if (inp) { inp.value = chip.getAttribute('data-name'); inp.focus(); }
-      });
-    });
+    renderSuggest();
   }
   function flowSlot() {
     var rows = '';
@@ -1104,16 +1379,17 @@
   function enterShell() {
     hideFlow();
     inShell = true;
+    syncEditor();
     term.setPrompt(core.promptPrefix(state));
-    term.push([seg(G_SPARK + ' Welcome to Console Incremental ' + G_SPARK, C.AquaSky)]);
-    term.push([seg('Console Incremental @ ' + VERSION, C.AquaSky)]);
-    term.push([seg('Player : ' + playerName, C.Front)]);
-    term.push([seg('Slot : ' + currentSlot, C.Front)]);
-    term.push([seg('Game1-xri', C.Front)]);
-    term.push([seg('教程：' + (state.tutorialOn ? '开' : '关'), C.Front)]);
-    term.push([seg('输入 help 并按下回车以查看命令列表。', C.PaleYellow)]);
+    // TODO 6 / C++ 进入命令行时的状态块
+    term.push([seg('Console Incremental @' + VERSION, C.AquaSky)]);
+    term.push([seg('Player : ' + playerName, C.BrightWhite)]);
+    term.push([seg('Slot : ' + currentSlot, C.BrightWhite)]);
+    term.push([seg('Game1-xri', C.AquaSky)]);
+    term.pushLive(function () { return [seg('教程：' + (state.tutorialOn ? '开' : '关'), C.PaleYellow)]; });
+    term.push([seg('输入 help 并按下回车以查看命令列表', C.PaleGreen)]);
     if (state.tutorialOn && state.tutorialStage === 0) {
-      term.push([seg('教程：输入 res_a 查看资源 a，输入 buff_a 查看可购买项。', C.PaleGreen)]);
+      term.push([seg('教程：输入 res_a 查看资源 a 的信息。', C.PaleGreen)]);
     }
     term.blank();
     if (state.devMode) document.title = 'Console Incremental @ ' + VERSION + ' (dev mode)';
@@ -1146,6 +1422,19 @@
         term.focus();
       });
       term.onCompletion(handleCompletion);
+      // ESC 退出游戏（输入框为空时）；Ctrl+Enter 把选中命令取回输入框
+      term.onEscape(function () { executeCommand('exit'); });
+      term.onEditorInsert(function () {
+        var t = term.selectedBlockText();
+        if (t) term.setInput(t);
+        term.focus();
+      });
+      // 自动保存第三种情况：退出游戏（关闭 / 刷新页面）时保存
+      try {
+        global.addEventListener('beforeunload', function () {
+          if (inShell && playerName) core.writeSlot(playerName, currentSlot, state);
+        });
+      } catch (e) {}
       lastTick = performance.now();
       requestAnimationFrame(loop);
       renderStatusBar();

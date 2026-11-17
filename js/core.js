@@ -55,7 +55,14 @@
     return PALETTE.FRONT;
   }
 
-  // ---- 数字格式化：复刻 BigNum::toString（double 区间）----
+  // ---- BigNum：复刻 C++ bignum.cpp 的塔式科学计数法（Func23 / TODO 18）----
+  // 有限值直接存 number；超出 double 范围时改用 tower：
+  //   value = m[0] * 10^( m[1] * 10^( ... * 10^x ) )
+  // 规则：<1e5 普通小数；1e5..1e100000 为 n e x；再大为 m e n e x；
+  //       1e1e1000 起压缩为 ee x / eee x / …
+  function isBN(o) { return !!o && typeof o === 'object' && o.__bn === 1; }
+  function bnFinite(v) { return { __bn: 1, v: v, tower: null }; }
+  function bnTower(m, x) { return { __bn: 1, v: Infinity, tower: { m: m.slice(), x: x } }; }
   function fmtPlain(v) {
     if (!isFinite(v)) return v > 0 ? '∞' : '-∞';
     return v.toFixed(2);
@@ -68,28 +75,109 @@
     return head + (parts.length > 1 ? 'e' + parts[1] : '');
   }
   function fmtMantissa(m) { return trimSig(Number(m.toPrecision(6)).toString()); }
+  function bnToString(b) {
+    if (!b.tower) {
+      var v = b.v;
+      if (v === 0) return '0';
+      var neg = v < 0, a = Math.abs(v);
+      if (a < 1e5) return (neg ? '-' : '') + fmtPlain(a);
+      if (!isFinite(a)) return (neg ? '-' : '') + 'ee999';
+      var lx = Math.floor(Math.log10(a)), xi = Math.floor(lx);
+      var m0 = a / Math.pow(10, lx);
+      if (!isFinite(m0)) m0 = 1;
+      var ms = fmtMantissa(m0);
+      if (parseFloat(ms) >= 10) { ms = '1'; xi += 1; }
+      return (neg ? '-' : '') + ms + 'e' + xi;
+    }
+    var m = b.tower.m, x = b.tower.x, d = m.length;
+    if (d === 1) return x < 5 ? fmtPlain(m[0] * Math.pow(10, x)) : fmtMantissa(m[0]) + 'e' + x;
+    if (d === 2) return x < 1000
+      ? fmtMantissa(m[0]) + 'e' + fmtMantissa(m[1]) + 'e' + x
+      : 'ee' + x;
+    return new Array(d + 1).join('e') + x;
+  }
   function fmtNum(v) {
+    if (isBN(v)) return bnToString(v);
     if (typeof v === 'string') return v;
-    if (v === 0) return '0';
-    var neg = v < 0, a = Math.abs(v);
-    if (a < 1e5) return (neg ? '-' : '') + fmtPlain(a);
-    if (!isFinite(a)) return (neg ? '-' : '') + 'ee999';
-    var lx = Math.floor(Math.log10(a));
-    var xi = Math.floor(lx);
-    var m0 = a / Math.pow(10, lx);
-    if (!isFinite(m0)) m0 = 1;
-    var ms = fmtMantissa(m0);
-    if (parseFloat(ms) >= 10) { ms = '1'; xi += 1; }
-    return (neg ? '-' : '') + ms + 'e' + xi;
+    return bnToString(bnFinite(Number(v) || 0));
   }
   var fmtRes = fmtNum;
+
+  // 解析：支持 1e5 / 1.2e5 / "n e x" / "m e n e x" / "ee 1000" / "eee 1000"
+  // 有限值返回 number，超出 double 的塔式值返回 BigNum 对象，无效返回 NaN。
   function parseNum(str) {
-    str = String(str).trim();
-    var n = Number(str);
-    if (!isNaN(n) && isFinite(n)) return n;
-    var m = /^(-?[\d.]+)e([+-]?\d+)$/i.exec(str);
-    if (m) return parseFloat(m[1]) * Math.pow(10, parseInt(m[2], 10));
+    var t = String(str).trim();
+    if (!t) return NaN;
+    var sign = 1;
+    if (t.charAt(0) === '+') t = t.slice(1);
+    else if (t.charAt(0) === '-') { sign = -1; t = t.slice(1); }
+    // 紧凑塔式：ee 1000 / eee1000 / …
+    var cm = /^(e{1,8})\s*(\d+)$/i.exec(t);
+    if (cm) return bnTower(new Array(cm[1].length).fill(1), parseInt(cm[2], 10));
+    // 空格分隔的 n e x / m e n e x（策划案写法）
+    var sp = /^([\d.]+)\s+e\s+([\d.]+)(?:\s+e\s+(\d+))?$/i.exec(t);
+    if (sp) {
+      var n0 = parseFloat(sp[1]);
+      if (sp[3] !== undefined) return bnTower([n0, parseFloat(sp[2])], parseInt(sp[3], 10));
+      var xv = parseInt(sp[2], 10);
+      if (xv < 100000) return sign * n0 * Math.pow(10, xv);
+      var lx = Math.floor(Math.log10(xv));
+      return bnTower([n0, xv / Math.pow(10, lx)], lx);
+    }
+    var n = Number(t);
+    if (!isNaN(n) && isFinite(n)) return sign * n;
+    // 溢出：1e100000 之类，按 C++ 提升为二层塔
+    var sci = /^([\d.]+)e\+?(\d+)$/i.exec(t);
+    if (sci) {
+      var mant = parseFloat(sci[1]), exp = parseInt(sci[2], 10);
+      if (exp >= 100000) {
+        var lx2 = Math.floor(Math.log10(exp));
+        return bnTower([mant, exp / Math.pow(10, lx2)], lx2);
+      }
+      var val = mant * Math.pow(10, exp);
+      if (isFinite(val)) return sign * val;
+      return sign > 0 ? bnTower([mant, 1], Math.floor(Math.log10(exp))) : NaN;
+    }
     return NaN;
+  }
+  // 资源数量的运算 / 比较辅助（amount 可能是 number 或 BigNum）
+  function numValid(x) {
+    return x !== null && x !== undefined &&
+      (isBN(x) || (typeof x === 'number' && !isNaN(x)));
+  }
+  function numToDouble(x) {
+    if (isBN(x)) return x.tower ? Infinity : x.v;
+    return typeof x === 'number' ? x : (+x || 0);
+  }
+  function numCmp(a, b) {
+    var ta = isBN(a) ? a.tower : null, tb = isBN(b) ? b.tower : null;
+    var av = isBN(a) ? a.v : (+a || 0), bv = isBN(b) ? b.v : (+b || 0);
+    if (av !== bv) return av < bv ? -1 : 1;
+    if (ta && tb) {
+      if (ta.m.length !== tb.m.length) return ta.m.length < tb.m.length ? -1 : 1;
+      if (ta.x !== tb.x) return ta.x < tb.x ? -1 : 1;
+      for (var i = 0; i < ta.m.length; i++)
+        if (ta.m[i] !== tb.m[i]) return ta.m[i] < tb.m[i] ? -1 : 1;
+    }
+    return 0;
+  }
+  function numAdd(a, b) {
+    if (isBN(a)) { if (a.tower) return a; a = a.v; }
+    if (isBN(b)) { if (b.tower) return b; b = b.v; }
+    return (+a || 0) + (+b || 0);
+  }
+  function numSub(a, b) {
+    if (isBN(a)) { if (a.tower) return a; a = a.v; }
+    if (isBN(b)) { if (b.tower) return a; b = b.v; }
+    return (+a || 0) - (+b || 0);
+  }
+  function numGte(a, b) { return numCmp(a, b) >= 0; }
+  function numSerialize(x) {
+    return isBN(x) ? (x.tower ? { __bnTower: [x.tower.m, x.tower.x] } : x.v) : x;
+  }
+  function numDeserialize(x) {
+    if (x && typeof x === 'object' && x.__bnTower) return bnTower(x.__bnTower[0], x.__bnTower[1]);
+    return typeof x === 'number' ? x : (+x || 0);
   }
   function formatDuration(secs) {
     var s = Math.round(secs);
@@ -107,7 +195,7 @@
       a: { amount: 0, rate: 1.0 },
       cwd: '~', buys: {}, olpgOn: true, createdTime: nowString(),
       maxAmountA: 0, devMode: false, tutorialOn: true, tutorialStage: 0,
-      warnMin: 20, splitCount: 1,
+      warnMin: 20, splitCount: 1, defaultFg: 7,
       auxOn: {
         Ax1: true, Ax2: false, Ax3: true, Ax4: false, Ax5: false, Ax6: false,
         Ax7: false, Ax8: false, Ax9: false, Ax10: false, Ax11: false, Ax12: false,
@@ -160,9 +248,9 @@
       effect: function () { return ''; },
       factor: function (g) {
         if (buyCount(g, 'Ua1-1') <= 0) return 1.0;
-        return Math.max(1.0, Math.sqrt(Math.max(0, g.a.amount)) / 5.0);
+        return Math.max(1.0, Math.sqrt(Math.max(0, numToDouble(g.a.amount))) / 5.0);
       },
-      totalText: function (g) { return '×' + fmtRes(Math.max(1.0, Math.sqrt(Math.max(0, g.a.amount)) / 5.0)); },
+      totalText: function (g) { return '×' + fmtRes(Math.max(1.0, Math.sqrt(Math.max(0, numToDouble(g.a.amount))) / 5.0)); },
       bonus: function () { return 0.0; }
     },
     {
@@ -205,7 +293,7 @@
   function buyItemSegments(it, g) {
     var base = C.Front, green = C.LightGreen, red = C.LightRed, bold = C.AquaSky;
     var cnt = buyCount(g, it.id), price = buyPriceBase(it, cnt);
-    var affordable = g.a.amount >= price, ax1 = !!g.auxOn.Ax1;
+    var affordable = numGte(g.a.amount, price), ax1 = !!g.auxOn.Ax1;
     var idColor = base;
     if (ax1) {
       if (it.repeatable) { if (it.maxBuys > 0 && cnt >= it.maxBuys) idColor = green; }
@@ -229,18 +317,18 @@
     return formatDuration(secs);
   }
   function estimateAffordText(g, price) {
-    var have = g.a.amount;
+    var have = numToDouble(g.a.amount);
     if (have >= price) return '已可购买';
     var rate = computeRate(g);
     if (rate <= 0) return '速度不足(∞)';
     return formatCountdown((price - have) / rate);
   }
   function affordableItems(g) {
-    var out = [], have = g.a.amount;
+    var out = [];
     for (var i = 0; i < BUY_ITEMS.length; i++) {
       var it = BUY_ITEMS[i], cnt = buyCount(g, it.id);
       if (it.repeatable && it.maxBuys > 0 && cnt >= it.maxBuys) continue;
-      if (have >= buyPriceBase(it, cnt)) out.push(it);
+      if (numGte(g.a.amount, buyPriceBase(it, cnt))) out.push(it);
     }
     return out;
   }
@@ -336,7 +424,8 @@
     Ax16: 'tree 命令可展示最底层文件夹下的内容'
   };
   function auxiliaryLineSegments(g, id) {
-    var on = !!g.auxOn[id];
+    // dev 模式下所有辅助功能均为已解锁状态（策划案 S FuncX 第 2 条）
+    var on = !!g.devMode || !!g.auxOn[id];
     return [
       { t: '  ' + id + '. ' + (AX_LABELS[id] || '') + '[', c: C.Front },
       { t: on ? '开' : '关', c: on ? C.LightGreen : C.RedDusted },
@@ -384,10 +473,10 @@
   function deleteSave(name) { var root = readRoot(); delete root[name]; return writeRoot(root); }
   function stateToSlot(g) {
     return {
-      amount: g.a.amount, rate: computeRate(g), buys: JSON.parse(JSON.stringify(g.buys)),
-      cwd: g.cwd, olpgOn: g.olpgOn, createdTime: g.createdTime, maxAmountA: g.maxAmountA,
+      amount: numSerialize(g.a.amount), rate: computeRate(g), buys: JSON.parse(JSON.stringify(g.buys)),
+      cwd: g.cwd, olpgOn: g.olpgOn, createdTime: g.createdTime, maxAmountA: numSerialize(g.maxAmountA),
       devMode: g.devMode, tutorialOn: g.tutorialOn, tutorialStage: g.tutorialStage,
-      warnMin: g.warnMin, splitCount: g.splitCount,
+      warnMin: g.warnMin, splitCount: g.splitCount, defaultFg: g.defaultFg,
       auxOn: JSON.parse(JSON.stringify(g.auxOn)),
       customCmds: JSON.parse(JSON.stringify(g.customCmds)), lastSaved: nowString()
     };
@@ -414,22 +503,30 @@
   function slotSummary(name, slot) {
     var sd = readSlot(name, slot);
     if (!sd) return '(空)';
-    return 'a=' + fmtNum(sd.amount) + '  上次保存 ' + (sd.lastSaved || '');
+    return 'a=' + fmtNum(numDeserialize(sd.amount)) + '  上次保存 ' + (sd.lastSaved || '');
+  }
+  // Func2：已有存档提示「存档 xxx / 上次保存：槽位X:……」
+  function saveInfo(name) {
+    var s = readRoot()[name];
+    if (!s) return null;
+    var slot = s.lastSlot || 1;
+    return { name: name, lastSlot: slot, summary: slotSummary(name, slot) };
   }
   function slotToState(sd, g) {
     if (!sd) return g;
-    g.a.amount = +sd.amount || 0;
+    g.a.amount = numDeserialize(sd.amount);
     g.a.rate = computeRate(g);
     g.buys = sd.buys || {};
     g.cwd = sd.cwd || '~';
     g.olpgOn = sd.olpgOn !== false;
     g.createdTime = sd.createdTime || nowString();
-    g.maxAmountA = +sd.maxAmountA || 0;
+    g.maxAmountA = numDeserialize(sd.maxAmountA);
     g.devMode = !!sd.devMode;
     if (typeof sd.tutorialOn === 'boolean') g.tutorialOn = sd.tutorialOn;
     if (typeof sd.tutorialStage === 'number') g.tutorialStage = sd.tutorialStage;
     if (typeof sd.warnMin === 'number') g.warnMin = sd.warnMin;
     if (typeof sd.splitCount === 'number') g.splitCount = sd.splitCount;
+    if (typeof sd.defaultFg === 'number') g.defaultFg = sd.defaultFg;
     if (sd.auxOn) Object.keys(sd.auxOn).forEach(function (k) { g.auxOn[k] = sd.auxOn[k]; });
     if (sd.customCmds) g.customCmds = sd.customCmds;
     return g;
@@ -440,7 +537,7 @@
     if (isNaN(t0)) return 0;
     var sec = (t1 - t0) / 1000;
     if (sec < 1) return 0;
-    g.a.amount += sec * computeRate(g);
+    g.a.amount = numAdd(g.a.amount, sec * computeRate(g));
     return sec;
   }
   function exportData(name, slot) {
@@ -465,11 +562,21 @@
 
   var DEV_PASSWORD = "G3Eq78Aq,1bo4llTc!F{px\\6'N]";
 
+  // color <0-F>：对齐 C++ 的 16 色控制台前景色索引
+  var FG16 = [
+    '#000000', '#000080', '#008000', '#008080', '#800000', '#800080', '#808000', '#c0c0c0',
+    '#808080', '#0000ff', '#00ff00', '#00ffff', '#ff0000', '#ff00ff', '#ffff00', '#ffffff'
+  ];
+
   global.INC = global.INC || {};
   global.INC.core = {
-    PALETTE: PALETTE, C: C, css: css, THEMES: THEMES,
+    PALETTE: PALETTE, C: C, css: css, THEMES: THEMES, FG16: FG16,
     setTheme: setTheme, getTheme: getTheme,
     fmtNum: fmtNum, fmtRes: fmtRes, parseNum: parseNum,
+    isBN: isBN, bnToString: bnToString,
+    numValid: numValid, numToDouble: numToDouble, numCmp: numCmp,
+    numAdd: numAdd, numSub: numSub, numGte: numGte,
+    numSerialize: numSerialize, numDeserialize: numDeserialize,
     formatDuration: formatDuration, formatCountdown: formatCountdown,
     createState: createState, nowString: nowString, parseTime: parseTime,
     BUY_ITEMS: BUY_ITEMS, findBuyItem: findBuyItem, buyCount: buyCount,
@@ -482,7 +589,7 @@
     SLOT_COUNT: SLOT_COUNT, DEV_PASSWORD: DEV_PASSWORD,
     listSaves: listSaves, createSave: createSave, saveExists: saveExists, deleteSave: deleteSave,
     stateToSlot: stateToSlot, writeSlot: writeSlot, readSlot: readSlot, hasSlotData: hasSlotData,
-    clearSlot: clearSlot, slotSummary: slotSummary, slotToState: slotToState,
+    clearSlot: clearSlot, slotSummary: slotSummary, saveInfo: saveInfo, slotToState: slotToState,
     applyOfflineProgress: applyOfflineProgress, exportData: exportData, importData: importData
   };
 })(window);
