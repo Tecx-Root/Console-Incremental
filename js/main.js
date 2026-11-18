@@ -1329,6 +1329,9 @@
       if (sd) {
         try { core.slotToState(sd, state); core.applyOfflineProgress(state, sd); } catch (e) {}
       }
+      // 进入游戏一律从根目录重新开始（存档只保留数值与开关，不继承上次所在目录）
+      state.cwd = '~';
+      if (sd) { try { core.writeSlot(playerName, currentSlot, state); } catch (e) {} }
       flowGame();
     }
     function onKey(e) {
@@ -1391,6 +1394,8 @@
       term.push([seg('教程：输入 res_a 查看资源 a 的信息。', C.PaleGreen)]);
     }
     term.blank();
+    // 进入时展示根目录内容：提示符、状态栏与目录视图都落在 ~
+    showView('~');
     if (state.devMode) document.title = 'Console Incremental @ ' + VERSION + ' (dev mode)';
     if (!windows.newsIsRunning()) windows.newsStart(windows.NEWS_ITEMS);
     if (state.auxOn.Ax11 && state.splitCount > 1) windows.splitStart(state.splitCount, splitContent);
