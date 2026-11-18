@@ -2,14 +2,15 @@
  * 暴露 window.INC.term。
  * 视图区（view）：由 beginView/endView 包住的「当前目录内容」，切目录时整块替换，
  * 避免 live 行无限堆积；命令历史与回显保留在视图区之外。
+ * 常驻区（pinned）：独立 DOM 容器，不受 beginView/clearView 影响，用于资源信息盒常驻。
  */
 (function (global) {
   'use strict';
   var core = global.INC.core;
   var css = core.css;
 
-  var el = null, input = null, promptEl = null, inputLine = null;
-  var entries = [];
+  var el = null, input = null, promptEl = null, inputLine = null, pinnedEl = null;
+  var entries = [], pinnedEntries = [];
   var cmdHistory = [], histIndex = -1;
   var cmdCb = null, completionCb = null, escapeCb = null, editorInsertCb = null;
   var editorOn = false, selection = [], clipText = '';
@@ -39,6 +40,10 @@
   function init(root) {
     el = typeof root === 'string' ? document.getElementById(root) : root;
     el.innerHTML = '';
+    // 常驻区：视图区之外，切目录 / 清屏都不会移除它
+    pinnedEl = document.createElement('div');
+    pinnedEl.className = 'term-pinned';
+    el.appendChild(pinnedEl);
     inputLine = document.createElement('div');
     inputLine.id = 'input-line';
     promptEl = document.createElement('span');
@@ -255,6 +260,29 @@
     });
   }
 
+  // ---------- 常驻区：切目录 / 清屏都不移除，仍按帧刷新 live 行 ----------
+  function clearPinned() {
+    if (!pinnedEl) { pinnedEntries = []; return; }
+    pinnedEntries.forEach(function (en) {
+      if (en.node && en.node.parentNode === pinnedEl) pinnedEl.removeChild(en.node);
+    });
+    pinnedEntries = [];
+  }
+  function pinBox(title, lines, opts) {
+    clearPinned();
+    // 先走 box() 的构建 + 提交，再把它从普通历史移到常驻容器
+    var en = box(title, lines, opts);
+    var idx = entries.indexOf(en);
+    if (idx >= 0) {
+      entries.splice(idx, 1);
+      if (inView) view.end = Math.max(view.start, view.end - 1);
+    }
+    if (en.node && en.node.parentNode) en.node.parentNode.removeChild(en.node);
+    pinnedEntries.push(en);
+    if (pinnedEl) pinnedEl.appendChild(en.node);
+    return en;
+  }
+
   // ---------- 视图区 ----------
   function dropView() {
     if (view.start < 0) return;
@@ -415,7 +443,8 @@
     entries = [];
     view.start = -1; view.end = -1; inView = false;
     if (el) Array.prototype.slice.call(el.childNodes).forEach(function (n) {
-      if (n !== inputLine) el.removeChild(n);
+      // 常驻区与输入行保留：cls 清屏不应让资源盒消失
+      if (n !== inputLine && n !== pinnedEl) el.removeChild(n);
     });
   }
   function setInput(v) { if (input) { input.value = v; autoGrow(); if (completionCb) completionCb('input', v); } }
@@ -433,9 +462,8 @@
   function recentLines(n) {
     return entries.slice(-Math.max(1, n)).map(lineText);
   }
-  function repaint() {
-    if (!el) return;
-    entries.forEach(function (en) {
+  function repaintList(list) {
+    list.forEach(function (en) {
       if (en.custom) return;
       if (en.box) {
         en.segsList.forEach(function (arr, k) {
@@ -449,16 +477,21 @@
       }
       var arr = en.live ? normalize(en.live()) : (en.segs || []);
       en.segs = arr;
-      var fresh = makeLineNode(arr);
-      if (en.node && en.node.parentNode) el.replaceChild(fresh, en.node);
-      en.node = fresh;
+      var freshLine = makeLineNode(arr);
+      if (en.node && en.node.parentNode) en.node.parentNode.replaceChild(freshLine, en.node);
+      en.node = freshLine;
     });
   }
+  function repaint() {
+    if (!el) return;
+    repaintList(entries);
+    repaintList(pinnedEntries);
+  }
 
-  function render() {
+  function renderList(list) {
     var changed = false;
-    for (var i = 0; i < entries.length; i++) {
-      var en = entries[i];
+    for (var i = 0; i < list.length; i++) {
+      var en = list[i];
       if (en.custom) continue;
       if (en.box) {
         en.generators.forEach(function (gen, k) {
@@ -479,15 +512,21 @@
       if (key2 === en.lastKey) continue;
       en.lastKey = key2;
       var fresh2 = makeLineNode(segs);
-      if (en.node && en.node.parentNode) el.replaceChild(fresh2, en.node);
+      if (en.node && en.node.parentNode) en.node.parentNode.replaceChild(fresh2, en.node);
       en.node = fresh2;
       changed = true;
     }
+    return changed;
+  }
+  function render() {
+    var changed = renderList(entries);
+    if (renderList(pinnedEntries)) changed = true;
     if (changed && atBottom) el.scrollTop = el.scrollHeight;
   }
 
   global.INC.term = {
     init: init, push: push, pushLive: pushLive, blank: blank, box: box,
+    pinBox: pinBox, clearPinned: clearPinned,
     beginView: beginView, endView: endView, clearView: clearView,
     setPrompt: setPrompt, onCommand: onCommand, onCompletion: onCompletion,
     focus: focus, render: render, repaint: repaint, clear: clear,

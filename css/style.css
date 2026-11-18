@@ -166,6 +166,15 @@ body {
 .line { min-height: 1.5em; }
 .seg { white-space: pre-wrap; }
 
+/* 常驻资源盒：贴在终端顶部，切目录 / cls 清屏都不消失 */
+.term-pinned {
+  position: sticky; top: 0; z-index: 4;
+  background: linear-gradient(180deg, var(--bg) 76%, rgba(11, 14, 20, 0));
+  padding: 4px 0 6px;
+}
+.term-pinned:empty { display: none; }
+.term-pinned .term-box { margin: 0 0 8px; }
+
 /* 盒框：真实 CSS 边框容器。所有行共享同一盒模型，
    不再用 Unicode 框线字符 + 估算宽度补空格（中文/英文混排必然错位）。 */
 .term-box {
@@ -328,7 +337,8 @@ body {
 .flow-card {
   position: relative;
   width: min(92vw, 620px); padding: 28px 34px 26px;
-  max-height: calc(100vh - 40px); overflow-y: auto;
+  max-height: calc(100vh - 40px); overflow-y: auto; overflow-x: hidden;
+  scrollbar-width: thin; scrollbar-color: var(--line) transparent;
   border: 1px solid var(--line); border-radius: 14px;
   background: linear-gradient(165deg, rgba(65, 105, 225, .11), var(--bg) 52%), var(--bg);
   box-shadow:
@@ -395,15 +405,19 @@ body {
 }
 .flow-input.shake { animation: shake .4s ease; border-color: var(--bad); }
 @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
-.flow-suggest { margin-top: 16px; color: var(--panel); font-size: 12px; max-height: 150px; overflow-y: auto; }
+/* 存档建议区：自然展开，禁止嵌套滚动条；hover 不产生位移（位移会撑出水平滚动条） */
+.flow-suggest { margin-top: 16px; color: var(--panel); font-size: 12px; overflow: hidden; }
 .suggest-title { margin-bottom: 6px; letter-spacing: .5px; }
 .save-chip {
   display: block; margin: 5px 0; padding: 7px 12px; cursor: pointer;
   border: 1px solid var(--line); border-radius: 9px; color: var(--aqua);
   background: rgba(134, 184, 239, .03);
-  transition: background .18s, color .18s, border-color .18s, transform .18s;
+  transition: background .18s, color .18s, border-color .18s, box-shadow .18s;
 }
-.save-chip:hover { background: var(--royal); color: #fff; border-color: var(--royal); transform: translateX(3px); }
+.save-chip:hover {
+  background: var(--royal); color: #fff; border-color: var(--aqua);
+  box-shadow: 0 0 0 2px rgba(134, 184, 239, .25), 0 6px 20px rgba(65, 105, 225, .35);
+}
 .suggest-meta { display: block; margin-top: 3px; color: var(--panel); font-size: 11px; }
 .save-chip:hover .suggest-meta { color: rgba(255, 255, 255, .8); }
 

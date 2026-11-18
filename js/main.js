@@ -175,13 +175,14 @@
         return [seg('速度     : +', C.Front), seg(core.fmtNum(state.a.rate) + '/s', C.BrightWhite)];
       };
       if (state.auxOn.Ax6) {
-        term.box(' RESOURCE a ', [
+        // 常驻盒：切目录 / cls 清屏都不移除，仍逐帧刷新数值与曲线
+        term.pinBox(' RESOURCE a ', [
           resRow, rateRow,
           function () { return [seg('历史峰值 : ', C.Front), seg(core.fmtNum(state.maxAmountA), C.PaleYellow)]; },
           function () { return [seg(sparkline(resHistory, 46), C.AquaSky)]; }
         ], { color: C.LightBlue, width: 60 });
       } else {
-        term.box(' RESOURCE STATUS ', [resRow, rateRow], { color: C.PaleGreen, width: 88 });
+        term.pinBox(' RESOURCE STATUS ', [resRow, rateRow], { color: C.PaleGreen, width: 88 });
       }
     } else if (path === '~\\game1-xri\\a\\a_buff' || path === '~\\game1-xri\\a\\a_upgrade') {
       term.push([seg(path.indexOf('a_buff') >= 0 ? 'a 类可重复购买的购买项：' : 'a 类升级信息：', C.PaleYellow)]);
@@ -782,19 +783,17 @@
       if (state.cwd !== '~\\game1-xri\\auxiliary' && !state.auxOn.Ax14 && !state.devMode) {
         term.push([seg('须在 ~\\game1-xri\\auxiliary 目录下操作，或开启 Ax14。', C.PaleYellow)]); return;
       }
-      if (id === 'Ax15') {
-        if (on) {
-          state.auxOn[id] = true; core.writeSlot(playerName, currentSlot, state);
-          term.push([seg('Ax15 已开启（批量执行 *n：命令后可加 *n 重复执行 n 遍；解锁后无法关闭）。', C.PaleGreen)]);
-        } else term.push([seg('Ax15（批量执行功能）解锁后无法关闭。', C.PaleYellow)]);
-        return;
-      }
+      // Ax15 与其他开关一致，可随时 on/off
       state.auxOn[id] = on; core.writeSlot(playerName, currentSlot, state);
       if (id === 'Ax5') syncEditor();
       if (!on && id === 'Ax9') { remindLast = {}; remindStep = {}; windows.toastHide(); }
       if (!on && id === 'Ax7') { treeCollapsed = {}; }
       if (!on && id === 'Ax11') windows.splitStop();
-      term.push([seg(id + ' 已' + (on ? '开启' : '关闭') + '。', C.PaleGreen)]);
+      if (id === 'Ax15') {
+        term.push([seg(on
+          ? 'Ax15 已开启（批量执行 *n：命令后可加 *n 重复执行 n 遍；可随时用 Ax15 off 关闭）。'
+          : 'Ax15 已关闭，批量执行 *n 不再可用。', C.PaleGreen)]);
+      } else term.push([seg(id + ' 已' + (on ? '开启' : '关闭') + '。', C.PaleGreen)]);
       if (on && id === 'Ax5') ax5Help();
       if (on && id === 'Ax6') {
         term.push([seg('更好的资源信息：输入 res_a 或 rishow_a 时显示资源增长曲线（半透明玻璃面板 + 发光折线）。', C.PaleYellow)]);
@@ -813,7 +812,7 @@
         term.push([seg('须在 ~\\game1-xri\\auxiliary 目录下操作，或开启 Ax14。', C.PaleYellow)]); return;
       }
       var val = command.slice(-2) === 'on';
-      Object.keys(state.auxOn).forEach(function (k) { if (k !== 'Ax15') state.auxOn[k] = val; });
+      Object.keys(state.auxOn).forEach(function (k) { state.auxOn[k] = val; });
       core.writeSlot(playerName, currentSlot, state);
       syncEditor();
       if (!val) { remindLast = {}; remindStep = {}; treeCollapsed = {}; windows.toastHide(); windows.splitStop(); }
